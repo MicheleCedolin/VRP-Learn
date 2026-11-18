@@ -48,6 +48,7 @@ The solver is an educational implementation. It is written from the cited papers
 docs/      the website (GitHub Pages): index.html (Solver), learn.html (Learn), assets/, data/ (bundled examples)
 tests/     Node tests of the solver engine, the CSV reader, the bundled examples and the reference list
 scripts/   catalogue_site.mjs  (data/catalogue.tsv -> docs/assets/instances.js)
+           render_math.mjs     (TeX source of the models -> typeset formulas in docs/learn.html)
 data/      catalogue.tsv  (examples, their sources and best-known values)
 ```
 
@@ -65,4 +66,4 @@ See [`CITATION.cff`](CITATION.cff) (GitHub shows a "Cite this repository" button
 
 ## Licence
 
-MIT for the code and the text of this repository ([LICENSE](LICENSE)); the bundled benchmark files keep their own licences as noted above.
+MIT for the code and the text of this repository ([LICENSE](LICENSE)); the bundled benchmark files keep their own licences as noted above. The formulas are typeset with [KaTeX](https://katex.org) (MIT), whose style sheet and fonts are bundled in `docs/assets/katex/`.

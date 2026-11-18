@@ -160,3 +160,21 @@ body:not(.simple) .simpleonly { display: none; }
 .guide { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .4rem 1rem; margin: 0 0 .8rem; max-width: 78ch; }
 .guide summary { font-weight: 600; margin: .3rem 0; }
 .guide ol { margin: .3rem 0 .5rem; padding-left: 1.3rem; }
+/* Learn: mathematical models (pre-rendered with KaTeX by scripts/render_math.mjs) */
+.mgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: .8rem; margin: .8rem 0; max-width: 60rem; } .mnote .katex, .mdefs dd .katex { font-size: 1em; }
+.mdefs { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .6rem 1rem .7rem; }
+.mdefs h4 { margin: .1rem 0 .4rem; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.mdefs dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem .9rem; margin: 0; align-items: baseline; }
+.mdefs dt { white-space: nowrap; } .mdefs dt .katex { font-size: 1em; } .mdefs dd { margin: 0; color: var(--muted); font-size: .93rem; }
+.mmodel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: .8rem 0 1rem; max-width: 60rem; overflow: hidden; }
+.mrow { display: grid; grid-template-columns: minmax(0, 1fr) auto 3.6rem; grid-template-areas: "eq q no" "note note note"; align-items: center; column-gap: 1rem; padding: .5rem 1rem .45rem; border-top: 1px solid var(--line); scroll-margin-top: 5rem; }
+.mrow:first-child { border-top: 0; background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.mrow:target { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.meq { grid-area: eq; overflow-x: auto; overflow-y: hidden; padding: .15rem 0; } .meq .katex-display { margin: 0; text-align: left; } .meq .katex-display > .katex { text-align: left; }
+.mq { grid-area: q; white-space: nowrap; color: var(--ink); } .mno { grid-area: no; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mnote { grid-area: note; color: var(--muted); font-size: .9rem; }
+.katex { font-size: 1.08em; }
+@media (max-width: 640px) {
+  .mrow { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "eq no" "q q" "note note"; }
+  .mq { white-space: normal; overflow-x: auto; }
+}
