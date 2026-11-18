@@ -1,0 +1,11 @@
+Bundled benchmark instances
+
+These files are unmodified copies of public benchmark instances, bundled so that the Solver works without third-party hosts.
+
+* `cvrp/X-n*.vrp`: instances of the X set of Uchoa et al. (2017), "New benchmark instances for the capacitated vehicle routing problem", EJOR 257(3):845-858, copied from the instance folder of <https://github.com/vidalt/HGS-CVRP>. The full set is at <http://vrp.galgos.inf.puc-rio.br/> (CVRPLIB).
+* `mdvrp/p01..p23`, `mdvrp/pr01..pr10`: multi-depot instances of Cordeau, Gendreau and Laporte (1997), "A tabu search heuristic for periodic and multi-depot vehicle routing problems", Networks 30(2):105-119, copied from <https://github.com/STOM-Group/MDVRP-Instances>.
+
+The original URL of every file is the `source` field in `../assets/instances.js`. All credit for the instances goes to their authors.
+
+Licences: the files keep the licence of the repository they were copied from (HGS-CVRP: MIT; STOM-Group/MDVRP-Instances: GPL-2.0).
+They are not covered by the licence of the VRP-Learn repository.

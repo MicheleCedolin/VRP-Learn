@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VRP Solver: single- and multi-depot</title>
+<meta name="description" content="Plan delivery routes in your browser: pick an example, generate random customers or upload your own table, press Solve and see the routes. Free, nothing is uploaded.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="VRP Solver: plan vehicle routes in your browser">
+<meta property="og:description" content="Pick an example or upload your own customers, press Solve and see the routes, the convergence and the spread over runs. 20 search methods, single and multiple depots.">
+<meta property="og:url" content="https://michelecedolin.github.io/VRP-Learn/">
+<meta property="og:image" content="https://michelecedolin.github.io/VRP-Learn/assets/preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<nav>
+  <span class="brand">VRP-Learn</span>
+  <a class="active" href="index.html">Solver</a>
+  <a href="learn.html">Learn</a>
+  <a href="https://github.com/MicheleCedolin/VRP-Learn">GitHub</a>
+</nav>
+<main class="wide">
+  <h1>Vehicle routing solver</h1>
+  <p class="lead">Find short delivery routes for a fleet of vehicles that start and end at one or more depots and must not exceed their capacity. Everything runs in your browser; nothing is uploaded.</p>
+  <details class="guide" id="guide">
+    <summary>How to use this page</summary>
+    <ol>
+      <li><b>Choose the customers.</b> Use an example, generate random customers, or upload your own table (a CSV file with the columns <code>x</code>, <code>y</code>, <code>demand</code>).</li>
+      <li><b>Press Solve.</b> The solver tries several times, each with different random choices, and keeps improving the routes for a few seconds.</li>
+      <li><b>Read the result.</b> The map shows the best routes found (one colour per route, or per depot when there are several; squares are depots). <i>Best cost</i> is the total distance driven. The charts show how quickly the cost fell and how much the tries differ.</li>
+    </ol>
+    <p class="small">Switch to <b>Expert</b> to choose among 20 search methods, compare them at equal compute time, and set seeds, iterations and local-search operators. The <a href="learn.html">Learn</a> tab explains the models and methods.</p>
+  </details>
+  <div class="modebar"><span class="seg" id="modeSeg" role="tablist" aria-label="Interface mode"><button type="button" class="on" data-mode="simple" role="tab">Simple</button><button type="button" data-mode="expert" role="tab">Expert</button></span></div>
+
+  <div class="app">
+    <div class="controls">
+      <div class="panel">
+        <h3>1 · Instance</h3>
+        <div class="seg" role="tablist" aria-label="Instance source">
+          <button type="button" class="on" data-src="bench" role="tab">Example</button>
+          <button type="button" data-src="random" role="tab">Random</button>
+          <button type="button" data-src="file" role="tab">Upload</button>
+        </div>
+        <div id="boxBench">
+          <label for="bench">Example (benchmark instance)</label>
+          <select id="bench"></select>
+          <p class="small">Public benchmark instances bundled with this site (<a href="data/SOURCES.txt">sources and credits</a>). Names with X are single-depot; p and pr have several depots.</p>
+        </div>
+        <div id="boxRandom" hidden>
+          <div class="row">
+            <div><label for="n">Customers</label><input id="n" type="number" min="10" max="400" value="80"></div>
+            <div><label for="t">Depots</label><input id="t" type="number" min="1" max="6" value="3"></div>
+          </div>
+          <div class="row adv">
+            <div><label for="gseed">Seed</label><input id="gseed" type="number" value="1"></div>
+            <div><label for="rs">Customers / route</label><input id="rs" type="number" min="3" max="40" value="8"></div>
+          </div>
+          <label class="chk adv"><input id="clustered" type="checkbox"> clustered customers</label>
+        </div>
+        <div id="boxFile" hidden>
+          <label for="file">Your file</label><input id="file" type="file" accept=".csv,.tsv,.txt,.vrp,text/csv,text/plain,*/*">
+          <label for="csvQ">Vehicle capacity <span class="small">(for CSV tables; empty = automatic)</span></label><input id="csvQ" type="number" min="1" placeholder="automatic">
+          <p class="small"><b>CSV table:</b> one row per location with the columns <code>x</code>, <code>y</code>, <code>demand</code>. Rows with demand 0 are depots (or add a <code>type</code> column with <code>depot</code>). Distances are straight lines in the units of your coordinates. <a href="#" id="dlTemplate">Download a template</a>.</p>
+          <p class="small adv">Also accepted: CVRPLIB <code>.vrp</code> (single depot) and Cordeau MDVRP files (<code>p01…</code>).</p>
+        </div>
+        <div class="btns"><button id="load" type="button">Load instance</button></div>
+        <dl id="info" class="info"></dl>
+      </div>
+
+      <div class="panel">
+        <h3>2 · Method and time</h3>
+        <label for="method">Search method <span class="small simpleonly">(not sure? keep the default)</span></label>
+        <select id="method"></select>
+        <p class="small methoddesc adv" id="methodDesc"></p>
+        <label class="chk adv"><input id="compare" type="checkbox"> compare several methods (same compute time per run)</label>
+        <div id="cmpBox" hidden>
+          <div class="btns tight"><button id="cmpAll" type="button" class="secondary">All</button><button id="cmpCore" type="button" class="secondary">Core six</button><button id="cmpNone" type="button" class="secondary">None</button></div>
+          <div id="cmpList" class="cmplist"></div>
+          <p class="small">Each method gets the iteration budget that takes about the chosen compute time on <i>this</i> instance and machine (a short timing run decides it); the table reports the real times. The runs of every method use the same seeds.</p>
+        </div>
+        <label for="construct" class="adv">Starting solution</label>
+        <select id="construct" class="adv">
+          <option value="savings">Clarke &amp; Wright savings</option>
+          <option value="sweep">Sweep (12 rotations)</option>
+          <option value="nn">Nearest neighbour</option>
+        </select>
+        <div class="row">
+          <div><label for="effort" title="Compute time per run; the iteration count is sized to match (Custom = type the iterations)">Time per run</label>
+            <select id="effort"><option value="quick">Quick · 2 s</option><option value="standard" selected>Standard · 6 s</option><option value="long">Long · 25 s</option><option value="custom">Custom</option></select></div>
+          <div class="adv"><label for="iters">Iterations <span class="small" id="itersNote"></span></label><input id="iters" type="number" min="50" step="50" value="50000"></div>
+        </div>
+        <details id="opsBox" class="adv">
+          <summary>Local-search settings (ILS and every method that applies a descent)</summary>
+          <label for="preset">Preset</label>
+          <select id="preset">
+            <option value="basic">Basic (relocate, swap, 2-opt, 2-opt*)</option>
+            <option value="standard">Standard (+ Or-opt)</option>
+            <option value="full" selected>Full (+ depot moves)</option>
+            <option value="custom">Custom</option>
+          </select>
+          <div class="ops" id="ops"></div>
+          <label for="k">Granular neighbourhood size k</label><input id="k" type="number" min="3" max="40" value="12">
+        </details>
+      </div>
+
+      <div class="panel">
+        <h3>3 · Solve</h3>
+        <div class="row">
+          <div><label for="runs" title="Each run starts from different random choices; more runs give a more reliable result">Number of tries (runs)</label><input id="runs" type="number" min="1" max="50" value="5"></div>
+          <div class="adv"><label for="seed">First seed</label><input id="seed" type="number" value="1"></div>
+        </div>
+        <label for="workers" class="adv">Parallel workers</label><input id="workers" class="adv" type="number" min="1" max="16" value="2">
+        <p class="small adv">Run <i>i</i> uses seed <i>first seed + i</i>. The same settings and iteration budget reproduce the same results; the iteration budget used is shown in the table and the CSV.</p>
+        <p class="small" id="est"></p>
+        <div class="btns"><button id="solve" type="button" disabled>Solve</button><button id="stop" type="button" class="secondary" disabled>Stop</button></div>
+        <progress id="prog" value="0" max="1" hidden></progress>
+        <p class="status" id="status" role="status" aria-live="polite"></p>
+      </div>
+    </div>
+
+    <div class="results">
+      <div class="kpis" id="kpis">
+        <div class="kpi"><b id="kBest">–</b><span>best cost</span></div>
+        <div class="kpi"><b id="kGap">–</b><span id="kGapLbl">gap to reference</span></div>
+        <div class="kpi"><b id="kMean">–</b><span id="kMeanLbl">mean ± sd over runs</span></div>
+        <div class="kpi"><b id="kRoutes">–</b><span>routes (shown run)</span></div>
+        <div class="kpi"><b id="kFeas">–</b><span>feasibility</span></div>
+        <div class="kpi"><b id="kTime">–</b><span>time per run (mean)</span></div>
+      </div>
+
+      <div class="cards">
+        <section class="card">
+          <h3>Routes <span class="small" id="mapCap"></span></h3>
+          <canvas id="map" width="900" height="640" role="img" aria-label="Map of the customers, depots and routes"></canvas>
+          <div class="legend" id="mapLegend"></div>
+          <div class="btns"><button id="dlMap" type="button" class="secondary" disabled>Download map (PNG)</button></div>
+        </section>
+        <section class="card">
+          <h3>Convergence <span class="small">(best cost so far)</span></h3>
+          <div class="ctl">
+            <span class="seg small" id="axisSeg"><button type="button" class="on" data-axis="iter">iterations</button><button type="button" data-axis="time">time</button></span>
+            <label class="chk"><input id="zoom" type="checkbox"> zoom on the converged part</label>
+          </div>
+          <canvas id="conv" width="900" height="520" role="img" aria-label="Convergence of the best cost for every run"></canvas>
+          <div class="legend clickable" id="convLegend"></div>
+          <div class="btns"><button id="dlConv" type="button" class="secondary" disabled>Download chart (PNG)</button></div>
+        </section>
+        <section class="card">
+          <h3>Final cost per run <span class="small">(mean ± sd)</span></h3>
+          <canvas id="disp" width="900" height="520" role="img" aria-label="Final cost of every run with mean and standard deviation"></canvas>
+          <p class="small" id="dispNote"></p>
+        </section>
+        <section class="card" id="rankCard" hidden>
+          <h3>Method ranking <span class="small">(click a row to draw that method's best run)</span></h3>
+          <div class="tablewrap"><table id="rankTable"><thead><tr><th>#</th><th>method</th><th class="num">mean</th><th class="num">sd</th><th class="num">best</th><th class="num" title="gap of the mean to the best-known value">gap % (mean)</th><th class="num">time s</th><th class="num">iterations</th><th class="num">runs</th></tr></thead><tbody></tbody></table></div>
+          <p class="small" id="rankNote"></p>
+        </section>
+        <section class="card" id="runsCard">
+          <h3>Runs <span class="small">(click a row to draw its routes)</span></h3>
+          <div class="tablewrap"><table id="runTable"><thead><tr><th class="mcol">method</th><th>#</th><th>seed</th><th class="num">cost</th><th class="num">gap %</th><th class="num">routes</th><th class="num">time s</th><th class="num" title="time at which the final best solution was found">found s</th><th title="feasible?">ok</th></tr></thead><tbody></tbody></table></div>
+          <div class="btns"><button id="dlSol" type="button" class="secondary" disabled>Download best solution</button><button id="dlCsv" type="button" class="secondary" disabled>Download runs (CSV)</button></div>
+          <p class="small">sd = sample standard deviation (n − 1). Time = compute time of the run inside its worker; runs in parallel share the machine, so a lone run can be faster. The best solution file lists one route per line: <code>Route #k (depot d): customer ids</code>.</p>
+        </section>
+      </div>
+    </div>
+  </div>
+  <p class="small">The solver is an educational implementation that runs in your browser; for large instances or benchmark-quality results use HGS-CVRP, PyVRP or FILO. Best-known values are shown only where we could check them against a published table.</p>
+</main>
+<script src="assets/instances.js"></script>
+<script src="assets/vrp.js"></script>
+<script src="assets/methods.js"></script>
+<script src="assets/runstats.js"></script>
+<script src="assets/solver.js"></script>
+</body>
+</html>

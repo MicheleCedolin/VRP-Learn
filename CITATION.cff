@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "VRP-Learn: a browser solver and learning guide for the vehicle routing problem"
+type: software
+authors:
+  - family-names: Cedolin
+    given-names: Michele
+repository-code: "https://github.com/MicheleCedolin/VRP-Learn"
+url: "https://michelecedolin.github.io/VRP-Learn/"
+license: MIT
+version: 1.0.0
+date-released: 2026-11-18
+keywords:
+  - vehicle routing problem
+  - CVRP
+  - MDVRP
+  - metaheuristics
+  - local search
+  - education

@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VRP Solver: Learn</title>
+<meta name="description" content="Mathematical models, variants, heuristics and local-search operators for the capacitated and multi-depot vehicle routing problem, with benchmark datasets and animated diagrams.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<nav>
+  <span class="brand">VRP-Learn</span>
+  <a href="index.html">Solver</a>
+  <a class="active" href="learn.html">Learn</a>
+  <a href="https://github.com/MicheleCedolin/VRP-Learn">GitHub</a>
+</nav>
+<main>
+<h1>Learn the VRP: models, variants, heuristics and local-search operators</h1>
+<p class="lead">A compact, referenced guide to the capacitated vehicle routing problem (CVRP) and its multi-depot variant (MDVRP): the mathematical model, the variant landscape, the heuristics used to solve them, every local-search operator implemented in this repository (with animated before/after diagrams) and the benchmark datasets. This page contains no experimental results: run your own, with several seeds, in the <a href="index.html">Solver</a> tab. Bracketed numbers <a href="#refs">[n]</a> point to the reference list; every DOI there was checked against Crossref.</p>
+<div class="toc">
+  <a href="#problem">1 Problem and model</a><a href="#variants">2 Variants</a><a href="#md">3 Single vs multi-depot</a><a href="#heur">4 Heuristics</a>
+  <a href="#ops">5 Local-search operators</a><a href="#bench">6 Benchmarks</a><a href="#open">7 Open code, data, further research</a><a href="#refs">8 References</a>
+</div>
+
+<!-- ============================================================ 1 -->
+<h2 id="problem">1. The problem and its mathematical model</h2>
+<p>Given a depot, a set <i>N</i> = {1,…,<i>n</i>} of customers with demands <i>q<sub>i</sub></i>, a homogeneous fleet of vehicles of capacity <i>Q</i>, and a travel cost <i>c<sub>ij</sub></i> for every pair of locations, the CVRP asks for a set of routes that each start and end at the depot, serve every customer exactly once, respect the capacity, and minimise the total travel cost. The problem was introduced as the "truck dispatching problem" [<a href="#r8">8</a>] and generalises the travelling salesman problem, hence it is NP-hard [<a href="#r13">13</a>]. Overviews: [<a href="#r11">11</a>, <a href="#r26">26</a>].</p>
+
+<h3>1.1 Two-index vehicle-flow formulation (the reference model)</h3>
+<p>Let <i>x<sub>ij</sub></i> = 1 if a vehicle drives directly from <i>i</i> to <i>j</i>, and let <i>u<sub>i</sub></i> be the cumulative load after serving <i>i</i> (Miller–Tucker–Zemlin-type constraints [<a href="#r14">14</a>] remove sub-tours and enforce capacity at once). Node 0 is the depot and <i>m</i> the fleet size.</p>
+<pre class="math">min   Σ_{i,j ∈ {0}∪N, i≠j}  c_ij · x_ij
+s.t.  Σ_j x_ij = 1                          ∀ i ∈ N        (one successor)
+      Σ_i x_ij = 1                          ∀ j ∈ N        (one predecessor)
+      Σ_j x_0j ≤ m                                          (fleet size)
+      u_j ≥ u_i + q_j − Q (1 − x_ij)        ∀ i,j ∈ N, i≠j (load propagation, no sub-tours)
+      q_i ≤ u_i ≤ Q                         ∀ i ∈ N        (capacity)
+      x_ij ∈ {0,1}</pre>
+<div class="explorer" data-explorer="cvrp"></div>
+<p class="small">Interactive: pick a view to see what one family of constraints means on a toy instance (8 customers, Q = 22, m = 3). Hand-made illustration, not a result.</p>
+<p>This model is compact but its linear relaxation is weak. It is stated here as the reference definition; this project does not hand it to a MILP solver. The heuristics were instead checked on tiny instances (n ≤ 10) against a subset dynamic programme that returns the same optimum (see the exact methods in section 4). A route-duration limit <i>D</i> adds cumulative-time variables of the same kind.</p>
+
+<h3>1.2 Set-partitioning formulation (basis of the best exact methods)</h3>
+<p>With Ω the set of all feasible routes, <i>c<sub>r</sub></i> the cost of route <i>r</i> and <i>a<sub>ir</sub></i> = 1 if <i>r</i> visits <i>i</i> [<a href="#r3">3</a>]:</p>
+<pre class="math">min  Σ_{r∈Ω} c_r λ_r     s.t.  Σ_{r∈Ω} a_ir λ_r = 1  ∀ i ∈ N,    Σ_{r∈Ω} λ_r ≤ m,    λ_r ∈ {0,1}</pre>
+<p>Ω is exponentially large, so branch-cut-and-price algorithms generate routes by column generation and strengthen the bound with cuts [<a href="#r16">16</a>]; the generic solver of [<a href="#r17">17</a>] applies the same machinery to many variants. These methods are state of the art for exact solution but are still limited to a few hundred customers, which is why heuristics (section 4) are used in practice.</p>
+
+<!-- ============================================================ 2 -->
+<h2 id="variants">2. Variants</h2>
+<p>Real problems add <em>attributes</em> to the CVRP. Surveys that organise them are [<a href="#r4">4</a>, <a href="#r29">29</a>, <a href="#r26">26</a>]; [<a href="#r30">30</a>] shows how one metaheuristic framework can address many attribute combinations.</p>
+<table>
+<thead><tr><th>Variant</th><th>What changes</th><th>Typical consequence for the model / algorithms</th></tr></thead>
+<tbody>
+<tr><td><b>CVRP</b></td><td>Baseline: one depot, capacity <i>Q</i>.</td><td>Route feasibility is a knapsack constraint; cost is sequence-dependent only through the distance.</td></tr>
+<tr><td>Distance / duration constrained</td><td>Each route's length (travel + service) ≤ <i>D</i>.</td><td>Needs cumulative-time bookkeeping; implemented here (checked in <code>Solution::violations</code>).</td></tr>
+<tr><td><b>VRPTW</b></td><td>Each customer has a time window; service times.</td><td>Feasibility depends on the visiting order; time variables or resource-extension functions; classical benchmark: Solomon [<a href="#r23">23</a>]. Not implemented here.</td></tr>
+<tr><td><b>MDVRP</b> <span class="tag md">multi-depot</span></td><td>Several depots, each with its own vehicles; a route starts and ends at the same depot.</td><td>Adds a customer-to-depot assignment decision; see section 3. Early models and heuristics: [<a href="#r12">12</a>, <a href="#r7">7</a>]; review: [<a href="#r15">15</a>].</td></tr>
+<tr><td>PVRP, MDPVRP</td><td>Planning horizon of several days; customers need a visit pattern (periodic), possibly with several depots.</td><td>Adds a pattern-selection layer; treated jointly with the MDVRP in [<a href="#r7">7</a>, <a href="#r28">28</a>].</td></tr>
+<tr><td>Split-delivery (SDVRP)</td><td>A customer's demand may be served by several vehicles.</td><td>Relaxes "exactly one visit"; solutions can be better than any unsplit one.</td></tr>
+<tr><td>Open VRP (OVRP)</td><td>Routes do not return to the depot.</td><td>Return arcs cost 0; neighbourhood evaluation changes at route ends. Handled by the general heuristic of [<a href="#r18">18</a>].</td></tr>
+<tr><td>Backhauls, pickup &amp; delivery (VRPB, VRPPD, PDPTW)</td><td>Pickups and deliveries, possibly paired with precedence.</td><td>Load is no longer monotone; pairing and precedence couple routes; see [<a href="#r21">21</a>].</td></tr>
+<tr><td>Heterogeneous fleet / fleet size and mix</td><td>Vehicles differ in capacity and cost.</td><td>Vehicle type becomes a decision; covered by the unified framework of [<a href="#r30">30</a>].</td></tr>
+</tbody></table>
+
+<!-- ============================================================ 3 -->
+<h2 id="md">3. Single depot vs multi-depot</h2>
+<p>The CVRP is the special case <i>t</i> = 1 of the MDVRP with <i>t</i> depots, and the Solver is written for the general case: <em>nothing in the data model, the local search or the exact model is special-cased for a single depot</em>. The multi-depot structure nevertheless changes what a "move" may do, which is the point of this section.</p>
+
+<h3>3.1 Multi-depot model</h3>
+<p>Besides the customer-to-customer arcs <i>x<sub>ij</sub></i>, use <i>y<sub>dj</sub></i> (a route leaves depot <i>d</i> for customer <i>j</i>), <i>z<sub>id</sub></i> (a route returns from <i>i</i> to <i>d</i>) and an assignment variable <i>a<sub>id</sub></i> = 1 if customer <i>i</i> is served from depot <i>d</i>. This is the model whose optimum the verification programme of section 4.D reproduces on tiny instances (depot-dependent capacity <i>Q<sub>d</sub></i> and fleet <i>m<sub>d</sub></i> included; the verifier is a set-partitioning dynamic programme, not a MILP solver):</p>
+<pre class="math">min   Σ c_ij x_ij + Σ_{d,j} c_dj y_dj + Σ_{i,d} c_id z_id
+s.t.  Σ_i x_ij + Σ_d y_dj = 1      ∀ j ∈ N          (one predecessor)
+      Σ_j x_ij + Σ_d z_id = 1      ∀ i ∈ N          (one successor)
+      Σ_d a_id = 1                 ∀ i ∈ N          (every customer has one depot)
+      y_dj ≤ a_jd ,  z_jd ≤ a_jd                    (a route is attached to its depot at both ends)
+      a_jd ≥ a_id + x_ij − 1       ∀ i≠j, d         (consecutive customers share the depot)
+      Σ_j y_dj ≤ m_d               ∀ d              (fleet per depot)
+      u_j ≥ u_i + q_j − Q_max (1 − x_ij) ,  q_i ≤ u_i ≤ Σ_d Q_d a_id</pre>
+<div class="explorer" data-explorer="md"></div>
+<p class="small">Interactive: toy instance with two depots and 11 customers. Change the fleet and capacity of each depot, or look at a route that ends at the wrong depot.</p>
+<p>The coupling constraints (<i>a<sub>jd</sub></i> ≥ …) are exactly what a single-depot model does not need: they force the first and the last depot of a route to coincide.</p>
+
+<h3>3.2 What actually differs</h3>
+<table>
+<thead><tr><th>Aspect</th><th>Single depot (CVRP)</th><th>Multi-depot (MDVRP)</th><th>Where it shows up in this code</th></tr></thead>
+<tbody>
+<tr><td>Decisions</td><td>Partition + order of customers.</td><td>Plus the depot of every route (equivalently of every customer).</td><td>Construction: nearest-depot assignment first (savings, sweep, nearest neighbour), or <em>joint</em> parallel insertion over all depots.</td></tr>
+<tr><td>Fleet</td><td>One fleet size, often free.</td><td>A limit <i>m<sub>d</sub></i> per depot (in the Cordeau benchmark files the same <i>m</i> for each depot).</td><td>Fleet limits are <em>soft</em> in the local search (penalty per surplus route) and repaired by dissolving the smallest routes at construction time.</td></tr>
+<tr><td>Capacity / duration</td><td>One <i>Q</i>, one <i>D</i>.</td><td>May depend on the depot (<i>Q<sub>d</sub></i>, <i>D<sub>d</sub></i>).</td><td>Every feasibility test uses the limits of the route's own depot.</td></tr>
+<tr><td>Depot edges of a route</td><td>Always the same two.</td><td>Depend on the route's depot.</td><td>Move deltas are computed from the route's own depot node, so a customer moved between depots automatically changes the depot edges.</td></tr>
+<tr><td>2-opt* (tail exchange)</td><td>Both variants valid.</td><td>The "reversed heads" variant (head of A + reversed head of B) is valid <em>only if both routes share the depot</em>; otherwise a route would start at one depot and end at another.</td><td><code>if A.d == B.d</code> guard in the operator.</td></tr>
+<tr><td>Extra neighbourhoods</td><td>—</td><td>Customer relocation across depots, re-homing a whole route, swapping the depots of two routes, opening a new route at the nearest depot.</td><td>Cards in section 5.3.</td></tr>
+<tr><td>Route-count lower bound</td><td>⌈Σq / Q⌉</td><td>Also bounded by Σ<sub>d</sub> <i>m<sub>d</sub></i>; tight fleets make bin-packing hard.</td><td>shown as "LB #routes" when an instance is loaded in the Solver.</td></tr>
+<tr><td>Benchmarks</td><td>CVRPLib sets (X, …).</td><td>Cordeau-format files p01–p23, pr01–pr10.</td><td>Both formats load in the Solver (examples or Upload).</td></tr>
+</tbody></table>
+
+<h3>3.3 Assign first, or search jointly?</h3>
+<p>Fixing the depot of every customer to its nearest depot and then solving one CVRP per depot is the natural "cluster first, route second" approach; it is a simplified version of the assignment step of constructions such as the multi-terminal sweep of Gillett and Johnson [<a href="#r9">9</a>]. Its weakness is structural: the assignment ignores the per-depot fleet and capacity limits, so it can overload a depot (even making the instance infeasible for that assignment), and customers near the border between two depots are often served more cheaply from the other one. Letting the search move customers, routes and whole depot assignments (the moves of section 5.3) removes that restriction at the price of a larger neighbourhood and a more involved feasibility bookkeeping. The <a href="index.html">Solver</a> tab lets you try the construction heuristics and operator sets (with and without the depot moves) on any of the instances.</p>
+
+<!-- ============================================================ 4 -->
+<h2 id="heur">4. Heuristic approaches</h2>
+<p>The literature groups heuristics into <em>construction</em>, <em>improvement by local search</em>, <em>metaheuristics</em> and <em>matheuristics/exact</em>; see [<a href="#r11">11</a>, <a href="#r4">4</a>]. "In the Solver" says whether the browser Solver uses it; the other entries are described from the literature only.</p>
+<h3>A. Construction heuristics</h3>
+<table>
+<thead><tr><th>Heuristic</th><th>Idea</th><th>Literature</th><th>In the Solver</th></tr></thead>
+<tbody>
+<tr><td>Savings</td><td>Start with one route per customer; merge routes in decreasing order of the saving <i>s<sub>ij</sub></i> = <i>c<sub>0i</sub></i> + <i>c<sub>0j</sub></i> − <i>c<sub>ij</sub></i> while feasible.</td><td>Clarke &amp; Wright [<a href="#r6">6</a>]</td><td>yes (per depot after nearest-depot assignment)</td></tr>
+<tr><td>Sweep</td><td>Sort customers by polar angle around the depot and cut the sequence into capacity-feasible routes (here: best of 12 rotations).</td><td>Gillett &amp; Miller [<a href="#r10">10</a>]</td><td>yes</td></tr>
+<tr><td>Multi-terminal sweep</td><td>Assign customers to depots, then sweep per depot. This is the classical MDVRP construction.</td><td>Gillett &amp; Johnson [<a href="#r9">9</a>]</td><td>yes (assignment = nearest depot)</td></tr>
+<tr><td>Nearest neighbour</td><td>Grow one route at a time by repeatedly adding the closest feasible customer.</td><td>folklore; baseline</td><td>yes</td></tr>
+<tr><td>Cheapest insertion</td><td>Insert customers one at a time at the cheapest feasible position; for the MDVRP over the routes of <em>all</em> depots (joint assignment).</td><td>insertion family, e.g. [<a href="#r23">23</a>] for time windows</td><td>no</td></tr>
+</tbody></table>
+
+<div class="animrow">
+<div><h4>Savings (Clarke–Wright), step by step</h4><div data-anim="savings"></div></div>
+<div><h4>Sweep, step by step</h4><div data-anim="sweep"></div></div>
+</div>
+<p class="small">Both animations replay the construction code of the browser solver on a 12-customer toy instance (single depot, Q = 60). Customer labels show <i>number (demand)</i>.</p>
+
+<h3>B. Local search and neighbourhood tools</h3>
+<table>
+<thead><tr><th>Tool</th><th>Idea</th><th>Literature</th><th>In the Solver</th></tr></thead>
+<tbody>
+<tr><td>Edge-exchange moves (relocate, swap, 2-opt, Or-opt)</td><td>Classical route-improvement neighbourhoods with efficient feasibility/cost checks.</td><td>Savelsbergh [<a href="#r22">22</a>]</td><td>yes</td></tr>
+<tr><td>2-opt*</td><td>Exchange the tails of two routes.</td><td>Potvin &amp; Rousseau [<a href="#r19">19</a>]</td><td>yes</td></tr>
+<tr><td>CROSS-exchange</td><td>Exchange two <em>segments</em> between routes.</td><td>Taillard et al. [<a href="#r24">24</a>]</td><td>no</td></tr>
+<tr><td>SWAP*</td><td>Swap two customers of different routes, each inserted at its <em>best</em> position in the other route rather than in place.</td><td>Vidal [<a href="#r31">31</a>]</td><td>no</td></tr>
+<tr><td>Granular neighbourhoods</td><td>Only examine pairs of customers that are among each other's <i>k</i> nearest neighbours.</td><td>Toth &amp; Vigo [<a href="#r25">25</a>]</td><td>yes</td></tr>
+</tbody></table>
+
+<h3>C. Metaheuristics and state-of-the-art solvers</h3>
+<table>
+<thead><tr><th>Method</th><th>Idea in one line</th><th>Literature</th><th>In the Solver</th></tr></thead>
+<tbody>
+<tr><td>Tabu search</td><td>Local search that forbids recently reversed moves; for the periodic and multi-depot VRP.</td><td>Cordeau et al. [<a href="#r7">7</a>]</td><td>— (the simpler random-candidate tabu search of section 4.E is implemented)</td></tr>
+<tr><td>Hybrid genetic search (HGS)</td><td>Population of giant tours, crossover + <em>education</em> by local search, diversity management; MDVRP/PVRP version (HGSADC) and the CVRP-specialised open-source version with SWAP*.</td><td>[<a href="#r28">28</a>, <a href="#r30">30</a>, <a href="#r31">31</a>]</td><td>— (use HGS-CVRP)</td></tr>
+<tr><td>Adaptive large neighbourhood search (ALNS)</td><td>Repeatedly destroy part of the solution and repair it, choosing among several destroy/repair operators adaptively; the general heuristic of [<a href="#r18">18</a>] handles CVRP, MDVRP, site-dependent and open VRPs.</td><td>[<a href="#r21">21</a>, <a href="#r18">18</a>]</td><td>yes (section 4.E)</td></tr>
+<tr><td>SISR (slack induction by string removals)</td><td>Ruin = remove several adjacent strings of customers, recreate = greedy insertion with random "blinks", accept with simulated annealing.</td><td>Christiaens &amp; Vanden Berghe [<a href="#r5">5</a>]</td><td>yes (<em>SISR-style</em>: own parameterisation, extended to several depots)</td></tr>
+<tr><td>Iterated local search</td><td>Perturb (here: ruin &amp; recreate), re-optimise with local search, accept by an annealing criterion.</td><td>generic scheme; FILO [<a href="#r1">1</a>] is a fast large-scale ILS</td><td>yes</td></tr>
+<tr><td>FILO</td><td>Fast iterated local search with localized optimization for very large CVRPs.</td><td>Accorsi &amp; Vigo [<a href="#r1">1</a>]</td><td>—</td></tr>
+<tr><td>KGLS</td><td>Guided local search for very large-scale routing problems.</td><td>Arnold et al. [<a href="#r2">2</a>]</td><td>—</td></tr>
+<tr><td>POPMUSIC matheuristic</td><td>Decompose the solution, re-optimise sub-problems with an exact solver.</td><td>Queiroga et al. [<a href="#r20">20</a>]</td><td>—</td></tr>
+<tr><td>PyVRP</td><td>Open-source HGS-based solver with a Python interface; supports many attributes incl. multiple depots.</td><td>Wouda et al. [<a href="#r32">32</a>]</td><td>— (external)</td></tr>
+</tbody></table>
+<h4>Ruin &amp; recreate with simulated annealing, live</h4>
+<div data-anim="rr"></div>
+<p class="small">This runs the same SISR-style search as the Solver tab, one iteration at a time, on a 32-customer toy instance. Ring colours: red = removed customers; after recreation green = candidate accepted, red = rejected. In <b>fast</b> and <b>turbo</b> speed the intermediate frames are skipped.</p>
+<div class="note"><b>Scope of the Solver.</b> Its engine is a teaching-grade JavaScript implementation that runs in your browser. It is not tuned to reproduce published results and is much less engineered than the solvers above. Its value is transparency: every solution it reports is re-checked for feasibility, and its methods are tested for feasibility, determinism and for never going below proven optima or published best-known values.</div>
+
+<h3>D. Exact methods (for reference)</h3>
+<p>Set partitioning [<a href="#r3">3</a>] with branch-cut-and-price [<a href="#r16">16</a>]; generic exact solver [<a href="#r17">17</a>]. A subset dynamic programme (Held–Karp per route, combined over customer subsets and depots; n ≤ 14) was used in this project to verify the heuristics on tiny instances; it is not competitive and is not part of the Solver.</p>
+
+<h3 id="methods">E. The 20 search methods of the Solver</h3>
+<p>The Solver tab offers the twenty methods below on every instance, and its <b>compare several methods</b> option runs a chosen set of them on the same instance with the same seeds. All of them share the instance model, the feasibility rules and, where they use local search, the operators of section 5, so differences between methods come from the search strategy and not from the plumbing. Each method is written from the cited literature in a compact, route-level form. They are <em>teaching-grade re-implementations</em>, not reproductions of the published codes, and their parameters are not tuned to match published results.</p>
+<p>"One step" is the unit counted as one iteration in the convergence plot. Because a step of a population method (one child) and a step of a trajectory method (one random move) cost very different amounts of time, iteration counts are comparable within a method but not across methods. The compare option therefore gives every method the same <em>compute time</em>: a short timing probe converts the time budget into an iteration budget for each method, which also fixes the cooling or adaptation schedules of the methods that depend on the number of iterations (simulated annealing, ALNS, SISR-style search). The calibration is approximate, particularly when several browser workers share a few CPU cores.</p>
+<div id="method-catalogue"><noscript>The catalogue is generated from the Solver's method definitions and needs JavaScript.</noscript></div>
+<div class="note"><b>Reading the table.</b> All twenty methods run in the browser Solver. The random-key family (BRKGA, PSO, DE) searches the unit hypercube and decodes keys into giant tours with the optimal split of Prins [<a href="#ref-prins2004">Prins 2004</a>]. <b>Random-key random search</b> is not a published method: it is the control baseline of that family, and any random-key method that does not beat it is not using its population. GRASP builds its starts with a randomised nearest-neighbour construction (section 4.A, restricted candidate list); multi-start local search decodes random priority keys with the optimal split.</div>
+
+<!-- ============================================================ 5 -->
+<h2 id="ops">5. Local-search operators</h2>
+<p>All operators are applied inside one <em>descent loop</em>: take a customer <i>u</i> from a queue of "dirty" customers; for each of its <i>k</i> nearest neighbours <i>v</i> (granular neighbourhood [<a href="#r25">25</a>]) evaluate every move variant that involves <i>u</i> and <i>v</i>; apply the best improving one; put the customers of the touched routes back in the queue; stop when the queue is empty. Fleet limits are penalised, not forbidden.</p>
+<p><b>O(1) evaluation.</b> Efficient implementations keep, for every route, prefix sums of demand, service time and edge cost. A candidate route is then a concatenation of at most a few <em>pieces</em> "route r, positions i..j, optionally reversed", whose cost, load and duration are obtained from the prefix sums without touching the nodes (the idea used by [<a href="#r22">22</a>] for edge exchanges). The Solver rebuilds the two affected routes instead (O(route length)), which is slower but simpler to verify.</p>
+<p>Diagrams: <span style="color:var(--c1)">blue</span> = route 1, <span style="color:var(--c2)">orange</span> = route 2, gold dots = customers, black squares = depots, ringed customers are the ones whose edges change. Press <b>▶ Play</b> (or drag the slider): the edges the move removes turn <span style="color:var(--bad)">dashed red</span> and fade out, then the edges it adds are drawn in <span style="color:var(--ok)">green</span> and take the colour of their route. The "after" routes are written out from each operator's definition; the operators themselves are verified in the test suite.</p>
+
+<h3>5.1 Customer moves</h3>
+<div class="cards">
+<div class="card"><h4>Relocate <span class="tag sd">SD + MD</span></h4>
+<p>Remove a customer (or a segment) and insert it before/after a neighbour <i>v</i>, in the same or in another route. Fast solvers also move short segments of 2–3 customers, optionally reversed; the Solver moves single customers (segments are handled by Or-opt). Also opens a <em>new route</em> when that is cheaper and the fleet allows.</p>
+<div class="fig" data-fig="relocate"></div><p class="meta">Source family: [<a href="#r22">22</a>].</p></div>
+<div class="card"><h4>Or-opt <span class="tag sd">SD + MD</span></h4>
+<p>Move a segment of 2–3 consecutive customers, reversed or not, to another position of the same or another route. Here the segment (a2,a3) is inserted reversed.</p>
+<div class="fig" data-fig="oropt"></div><p class="meta">In the Solver, Or-opt moves segments within a route and between routes.</p></div>
+<div class="card"><h4>Swap <span class="tag sd">SD + MD</span></h4>
+<p>Exchange two customers <i>u</i>, <i>v</i> of different routes: each takes the other's position. Capacity and duration of both routes are re-checked.</p>
+<div class="fig" data-fig="swap"></div></div>
+<div class="card"><h4>CROSS-exchange <span class="tag sd">SD + MD</span></h4>
+<p>Exchange two segments of consecutive customers between two routes (here two customers each). The Solver swaps single customers only.</p>
+<div class="fig" data-fig="cross"></div><p class="meta">[<a href="#r24">24</a>]</p></div>
+<div class="card"><h4>2-opt (intra-route) <span class="tag sd">SD + MD</span></h4>
+<p>Reverse a sub-sequence of one route, replacing two edges by two others. Capacity is unaffected; with a duration limit it is re-checked.</p>
+<div class="fig" data-fig="twoopt"></div></div>
+</div>
+
+<h3>5.2 Route-pair moves</h3>
+<div class="cards">
+<div class="card"><h4>2-opt* (tail exchange) <span class="tag sd">SD + MD</span></h4>
+<p>Cut route A after <i>u</i> and route B after <i>v</i> and exchange the tails: A = head(A) + tail(B), B = head(B) + tail(A). Valid for any pair of routes, also of different depots (each route keeps its own depot).</p>
+<div class="fig" data-fig="twooptstar"></div><p class="meta">[<a href="#r19">19</a>]</p></div>
+<div class="card"><h4>2-opt* with reversal <span class="tag md">same depot only</span></h4>
+<p>A = head(A) + <em>reversed</em> head(B), B = <em>reversed</em> tail(A) + tail(B). Each new route would run from the depot to a customer and back along reversed halves; with <b>two different depots</b> the routes would start at one depot and end at the other, so the operator is only generated when A and B share their depot.</p>
+<div class="fig" data-fig="twooptstarrev"></div></div>
+<div class="card"><h4>SWAP* <span class="tag sd">SD + MD</span></h4>
+<p>Swap <i>u</i> ∈ A and <i>v</i> ∈ B, but insert each at its cheapest position in the other route (found from the three best insertion positions kept per customer and route), not necessarily where the other customer was. Evaluated for pairs of routes whose customers are close to each other.</p>
+<div class="fig" data-fig="swapstar"></div><p class="meta">[<a href="#r31">31</a>] · described from the literature; not in the Solver.</p></div>
+</div>
+
+<h3>5.3 Depot moves (multi-depot only)</h3>
+<div class="cards">
+<div class="card"><h4>Relocate across depots <span class="tag md">MD</span></h4>
+<p>The ordinary relocate becomes an <em>assignment change</em> when the target route belongs to another depot: the customer leaves depot D1's route and joins one of D2. No special code is required because every delta uses the route's own depot nodes.</p>
+<div class="fig" data-fig="mdrelocate"></div></div>
+<div class="card"><h4>Route re-homing <span class="tag md">MD</span></h4>
+<p>Keep the customer sequence of a route but attach it to another depot (both depot edges change). Accepted if capacity, duration and fleet of the new depot allow it and the cost decreases.</p>
+<div class="fig" data-fig="routedepot"></div><p class="meta">Teaching operator of this project; not claimed to originate from the literature.</p></div>
+<div class="card"><h4>Depot swap <span class="tag md">MD</span></h4>
+<p>Exchange the depots of two routes that belong to different depots, keeping each sequence. Useful when two routes are "crossed" with respect to their depots and neither single re-homing is feasible because of the fleet limits.</p>
+<div class="fig" data-fig="depotswap"></div><p class="meta">Teaching operator (<code>depot_swap</code>).</p></div>
+<div class="card"><h4>New route at the nearest depot <span class="tag md">MD</span></h4>
+<p>Move a customer into a fresh route started at one of its two nearest depots that still has an unused vehicle. This lets the search use idle fleet capacity in a depot that currently has few routes.</p>
+<div class="fig" data-fig="newroute"></div><p class="meta">Part of <code>relocate</code>.</p></div>
+</div>
+
+<h3>5.4 Operator sets (presets)</h3>
+<p>The local search can be run with any subset of the operators. The Solver (Expert mode) offers <em>basic</em> (relocate, swap, 2-opt, 2-opt*), <em>standard</em> (adds Or-opt) and <em>full</em> (adds the depot moves), plus a custom selection.</p>
+
+<h3>5.5 Origin of the operators</h3>
+<table>
+<thead><tr><th>Operator</th><th>Reference used here</th></tr></thead>
+<tbody>
+<tr><td>relocate / swap / 2-opt / Or-opt (edge exchanges)</td><td>Savelsbergh [<a href="#r22">22</a>] (efficient evaluation); classical neighbourhoods</td></tr>
+<tr><td>2-opt*</td><td>Potvin &amp; Rousseau [<a href="#r19">19</a>]</td></tr>
+<tr><td>CROSS-exchange</td><td>Taillard et al. [<a href="#r24">24</a>]</td></tr>
+<tr><td>SWAP*</td><td>Vidal [<a href="#r31">31</a>]</td></tr>
+<tr><td>granular neighbourhood lists</td><td>Toth &amp; Vigo [<a href="#r25">25</a>]</td></tr>
+<tr><td>route re-homing, depot swap</td><td>Introduced for this project to isolate the depot-level degrees of freedom; no literature claim</td></tr>
+</tbody></table>
+<p class="small">We did not systematically compare the neighbourhood sets of all cited metaheuristics, so no paper-by-operator matrix is claimed; consult each paper for its exact neighbourhoods.</p>
+
+<!-- ============================================================ 6 -->
+<h2 id="bench">6. Benchmark datasets</h2>
+<table>
+<thead><tr><th>Set</th><th>Problem</th><th>Content</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td>X (Uchoa et al.)</td><td>CVRP</td><td>100 instances with 100 to 1,000 customers with diverse depot positions, customer distributions and demand patterns [<a href="#r27">27</a>]. Best known solutions are maintained on CVRPLib; many are proven optimal.</td><td><a href="https://galgos.inf.puc-rio.br/cvrplib/">CVRPLib</a></td></tr>
+<tr><td>XML, XL</td><td>CVRP</td><td>XML: 10,000 instances of 100 customers with known optimal solutions. XL: 100 instances with 1,000 to 10,000 customers (arXiv:2601.11467; CVRPLib BKS Challenge).</td><td>CVRPLib</td></tr>
+<tr><td>Classical CVRP sets</td><td>CVRP</td><td>Series A, B, E, F, M, P, CMT, … are also collected on CVRPLib; several are easy for modern algorithms [<a href="#r27">27</a>].</td><td>CVRPLib</td></tr>
+<tr><td>Cordeau et al.</td><td>MDVRP</td><td>33 files in Cordeau format (<code>p01–p23</code>, <code>pr01–pr10</code>), with a best-known-solution file for each at NEO; the same group also lists a 262-customer Gillett–Johnson instance and 20 MDVRPTW files [<a href="#r7">7</a>].</td><td><a href="https://neo.lcc.uma.es/vrp/">NEO VRP pages</a> · <a href="https://github.com/STOM-Group/MDVRP-Instances">STOM-Group/MDVRP-Instances</a> (GPL-2.0)</td></tr>
+<tr><td>Solomon</td><td>VRPTW</td><td>Classical 100-customer time-window instances [<a href="#r23">23</a>].</td><td><a href="https://www.sintef.no/projectweb/top/vrptw/100-customers/">SINTEF TOP</a></td></tr>
+</tbody></table>
+<h3>Loading instances in the Solver</h3>
+<p>The Solver tab offers X-n101-k25, X-n153-k22, X-n261-k13 and the Cordeau instances p01–p23 and pr01–pr10 as examples. Unmodified copies of these files are bundled with the site so that it does not depend on other hosts; they come from the public repositories HGS-CVRP (MIT) and STOM-Group/MDVRP-Instances (GPL-2.0) and keep their original licences (<a href="data/SOURCES.txt">sources and credits</a>). You can also upload your own table (CSV with the columns <code>x</code>, <code>y</code>, <code>demand</code>), or any CVRPLIB <code>.vrp</code> or Cordeau-format file.</p>
+<div class="note"><b>Best-known values.</b> They are maintained by the benchmark owners (CVRPLib for the X set, NEO for the Cordeau instances); look them up there or in the original papers. The Solver shows a reference value only where we could check it against a published table (X-n101-k25 and X-n153-k22 in [<a href="#r31">31</a>]; X-n261-k13 is listed as proven optimal on CVRPLib), and marks everything else as unverified. No gaps are claimed for the MDVRP instances.</div>
+
+<!-- ============================================================ 7 -->
+<h2 id="open">7. Open code, open data and further research</h2>
+<h3>Open source solvers worth reading</h3>
+<ul>
+<li><a href="https://github.com/vidalt/HGS-CVRP">HGS-CVRP</a> (MIT): C++ hybrid genetic search with SWAP*, canonical CVRP, also handles asymmetric distances and duration limits, designed for up to about 1,000 customers [<a href="#r31">31</a>].</li>
+<li><a href="https://github.com/PyVRP/PyVRP">PyVRP</a> (MIT): Python/C++ solver, HGS-based, supports time windows, heterogeneous fleets and <em>multiple depots</em> among others [<a href="#r32">32</a>].</li>
+<li><a href="https://github.com/acco93/filo">FILO</a> (AGPL-3.0; a more scalable FILO2 is linked from its README): fast ILS for large CVRPs [<a href="#r1">1</a>].</li>
+<li><a href="https://github.com/N-Wouda/ALNS">ALNS</a> (Python): a documented ALNS framework with several acceptance criteria and operator-selection schemes, with VRP and TSP examples [<a href="#ref-wouda2023">Wouda &amp; Lan 2023</a>].</li>
+<li><a href="https://github.com/ceandrade/brkga_mp_ipr_cpp">BRKGA-MP-IPR</a> (C++, header-only; Python and Julia versions exist): the multi-parent biased random-key GA with implicit path relinking; you supply only a decoder [<a href="#ref-andrade2021">Andrade et al. 2021</a>].</li>
+</ul>
+<h3>Open data</h3>
+<p>CVRPLib (X, XML, XL and classical sets with BKS), NEO and STOM-Group for the MDVRP, SINTEF TOP for time-window benchmarks (links in section 6).</p>
+<h3>Further research directions</h3>
+<div class="note">These are <em>our</em> synthesis of gaps visible in this project and the material above. We have not systematically reviewed the "future work" sections of the cited papers, so none of the points is attributed to them.</div>
+<ul>
+<li><b>Equal-time comparison of the 20 methods.</b> Compare the methods of section 4.E at matched compute time on the X and Cordeau sets with at least 10 seeds, then tune each with an automatic configurator on a training subset and re-test on held-out instances: how much of the ranking survives tuning is the open question. The random-key control (RKRS) is the yardstick for that family.</li>
+<li><b>Budget-dependent schedules.</b> Methods whose cooling or adaptation schedule is tied to the iteration budget (simulated annealing, ALNS, SISR-style) behave differently under a time limit than under an iteration limit; a systematic study of time-based schedules against calibrated iteration budgets is missing here.</li>
+<li><b>MDVRP benchmarking with verified references.</b> Collect primary-source best-known values for p01–p23 and pr01–pr10, then report gaps with at least 10 seeds and matched run times against HGS-style or PyVRP baselines.</li>
+<li><b>Depot-aware SWAP*.</b> SWAP* can be applied between routes of any depots; whether its best-insertion shortcuts (top-three positions) stay exact when capacities and depot edges differ per depot deserves a dedicated test and measurement.</li>
+<li><b>Fleet-tight multi-depot instances.</b> Nearest-depot assignment can violate the per-depot fleet limits when fleets are tight (section 3.3); a study of assignment strategies under tight fleets (bin-packing-aware assignment) is open.</li>
+<li><b>Depot-level operators.</b> Route re-homing and depot swap only act on routes whose depot is not the best one for them, and relocation across depots already re-assigns single customers (section 5.3), so it is an open question when they matter in practice. Instances with depot-dependent capacities or very uneven fleets, and perturbation-based searches, are the places to check whether they ever matter.</li>
+<li><b>Extending the model.</b> Time windows (MDVRPTW), periodic visits (MDPVRP) and heterogeneous fleets require resource-extension style feasibility checks.</li>
+</ul>
+
+<!-- ============================================================ 8 -->
+<h2 id="refs">8. References</h2>
+<h3>8.1 Models, operators, benchmarks and solvers</h3>
+<div class="refs"><ol>
+<li id="r1">Accorsi, L., Vigo, D. (2021). A fast and scalable heuristic for the solution of large-scale capacitated vehicle routing problems. <i>Transportation Science</i> 55(4):832–856. <a href="https://doi.org/10.1287/trsc.2021.1059">10.1287/trsc.2021.1059</a></li>
+<li id="r2">Arnold, F., Gendreau, M., Sörensen, K. (2019). Efficiently solving very large-scale routing problems. <i>Computers &amp; Operations Research</i> 107:32–42. <a href="https://doi.org/10.1016/j.cor.2019.03.006">10.1016/j.cor.2019.03.006</a></li>
+<li id="r3">Balinski, M.L., Quandt, R.E. (1964). On an integer program for a delivery problem. <i>Operations Research</i> 12(2):300–304. <a href="https://doi.org/10.1287/opre.12.2.300">10.1287/opre.12.2.300</a></li>
+<li id="r4">Braekers, K., Ramaekers, K., Van Nieuwenhuyse, I. (2016). The vehicle routing problem: State of the art classification and review. <i>Computers &amp; Industrial Engineering</i> 99:300–313. <a href="https://doi.org/10.1016/j.cie.2015.12.007">10.1016/j.cie.2015.12.007</a></li>
+<li id="r5"><span id="ref-christiaens2020"></span>Christiaens, J., Vanden Berghe, G. (2020). Slack induction by string removals for vehicle routing problems. <i>Transportation Science</i> 54(2):417–433. <a href="https://doi.org/10.1287/trsc.2019.0914">10.1287/trsc.2019.0914</a></li>
+<li id="r6">Clarke, G., Wright, J.W. (1964). Scheduling of vehicles from a central depot to a number of delivery points. <i>Operations Research</i> 12(4):568–581. <a href="https://doi.org/10.1287/opre.12.4.568">10.1287/opre.12.4.568</a></li>
+<li id="r7">Cordeau, J.-F., Gendreau, M., Laporte, G. (1997). A tabu search heuristic for periodic and multi-depot vehicle routing problems. <i>Networks</i> 30(2):105–119. <a href="https://doi.org/10.1002/(SICI)1097-0037(199709)30:2%3C105::AID-NET5%3E3.0.CO;2-G">10.1002/(SICI)1097-0037(199709)30:2&lt;105::AID-NET5&gt;3.0.CO;2-G</a></li>
+<li id="r8">Dantzig, G.B., Ramser, J.H. (1959). The truck dispatching problem. <i>Management Science</i> 6(1):80–91. <a href="https://doi.org/10.1287/mnsc.6.1.80">10.1287/mnsc.6.1.80</a></li>
+<li id="r9">Gillett, B., Johnson, J. (1976). Multi-terminal vehicle-dispatch algorithm. <i>Omega</i> 4(6):711–718. <a href="https://doi.org/10.1016/0305-0483(76)90097-9">10.1016/0305-0483(76)90097-9</a></li>
+<li id="r10">Gillett, B.E., Miller, L.R. (1974). A heuristic algorithm for the vehicle-dispatch problem. <i>Operations Research</i> 22(2):340–349. <a href="https://doi.org/10.1287/opre.22.2.340">10.1287/opre.22.2.340</a></li>
+<li id="r11">Laporte, G. (2009). Fifty years of vehicle routing. <i>Transportation Science</i> 43(4):408–416. <a href="https://doi.org/10.1287/trsc.1090.0301">10.1287/trsc.1090.0301</a></li>
+<li id="r12">Laporte, G., Nobert, Y., Taillefer, S. (1988). Solving a family of multi-depot vehicle routing and location-routing problems. <i>Transportation Science</i> 22(3):161–172. <a href="https://doi.org/10.1287/trsc.22.3.161">10.1287/trsc.22.3.161</a></li>
+<li id="r13">Lenstra, J.K., Rinnooy Kan, A.H.G. (1981). Complexity of vehicle routing and scheduling problems. <i>Networks</i> 11(2):221–227. <a href="https://doi.org/10.1002/net.3230110211">10.1002/net.3230110211</a></li>
+<li id="r14">Miller, C.E., Tucker, A.W., Zemlin, R.A. (1960). Integer programming formulation of traveling salesman problems. <i>Journal of the ACM</i> 7(4):326–329. <a href="https://doi.org/10.1145/321043.321046">10.1145/321043.321046</a></li>
+<li id="r15">Montoya-Torres, J.R., López Franco, J., Nieto Isaza, S., Felizzola Jiménez, H., Herazo-Padilla, N. (2015). A literature review on the vehicle routing problem with multiple depots. <i>Computers &amp; Industrial Engineering</i> 79:115–129. <a href="https://doi.org/10.1016/j.cie.2014.10.029">10.1016/j.cie.2014.10.029</a></li>
+<li id="r16">Pecin, D., Pessoa, A., Poggi, M., Uchoa, E. (2017). Improved branch-cut-and-price for capacitated vehicle routing. <i>Mathematical Programming Computation</i> 9(1):61–100. <a href="https://doi.org/10.1007/s12532-016-0108-8">10.1007/s12532-016-0108-8</a></li>
+<li id="r17">Pessoa, A., Sadykov, R., Uchoa, E., Vanderbeck, F. (2020). A generic exact solver for vehicle routing and related problems. <i>Mathematical Programming</i> 183(1–2):483–523. <a href="https://doi.org/10.1007/s10107-020-01523-z">10.1007/s10107-020-01523-z</a></li>
+<li id="r18"><span id="ref-pisinger2007"></span>Pisinger, D., Ropke, S. (2007). A general heuristic for vehicle routing problems. <i>Computers &amp; Operations Research</i> 34(8):2403–2435. <a href="https://doi.org/10.1016/j.cor.2005.09.012">10.1016/j.cor.2005.09.012</a></li>
+<li id="r19">Potvin, J.-Y., Rousseau, J.-M. (1995). An exchange heuristic for routeing problems with time windows. <i>Journal of the Operational Research Society</i> 46(12):1433–1446. <a href="https://doi.org/10.1057/jors.1995.204">10.1057/jors.1995.204</a></li>
+<li id="r20">Queiroga, E., Sadykov, R., Uchoa, E. (2021). A POPMUSIC matheuristic for the capacitated vehicle routing problem. <i>Computers &amp; Operations Research</i> 136:105475. <a href="https://doi.org/10.1016/j.cor.2021.105475">10.1016/j.cor.2021.105475</a></li>
+<li id="r21"><span id="ref-ropke2006"></span>Ropke, S., Pisinger, D. (2006). An adaptive large neighborhood search heuristic for the pickup and delivery problem with time windows. <i>Transportation Science</i> 40(4):455–472. <a href="https://doi.org/10.1287/trsc.1050.0135">10.1287/trsc.1050.0135</a></li>
+<li id="r22">Savelsbergh, M.W.P. (1992). The vehicle routing problem with time windows: minimizing route duration. <i>ORSA Journal on Computing</i> 4(2):146–154. <a href="https://doi.org/10.1287/ijoc.4.2.146">10.1287/ijoc.4.2.146</a></li>
+<li id="r23">Solomon, M.M. (1987). Algorithms for the vehicle routing and scheduling problems with time window constraints. <i>Operations Research</i> 35(2):254–265. <a href="https://doi.org/10.1287/opre.35.2.254">10.1287/opre.35.2.254</a></li>
+<li id="r24">Taillard, É., Badeau, P., Gendreau, M., Guertin, F., Potvin, J.-Y. (1997). A tabu search heuristic for the vehicle routing problem with soft time windows. <i>Transportation Science</i> 31(2):170–186. <a href="https://doi.org/10.1287/trsc.31.2.170">10.1287/trsc.31.2.170</a></li>
+<li id="r25">Toth, P., Vigo, D. (2003). The granular tabu search and its application to the vehicle-routing problem. <i>INFORMS Journal on Computing</i> 15(4):333–346. <a href="https://doi.org/10.1287/ijoc.15.4.333.24890">10.1287/ijoc.15.4.333.24890</a></li>
+<li id="r26">Toth, P., Vigo, D. (eds.) (2014). <i>Vehicle Routing: Problems, Methods, and Applications</i>, 2nd ed. SIAM. <a href="https://doi.org/10.1137/1.9781611973594">10.1137/1.9781611973594</a></li>
+<li id="r27">Uchoa, E., Pecin, D., Pessoa, A., Poggi, M., Vidal, T., Subramanian, A. (2017). New benchmark instances for the capacitated vehicle routing problem. <i>European Journal of Operational Research</i> 257(3):845–858. <a href="https://doi.org/10.1016/j.ejor.2016.08.012">10.1016/j.ejor.2016.08.012</a></li>
+<li id="r28"><span id="ref-vidal2012"></span>Vidal, T., Crainic, T.G., Gendreau, M., Lahrichi, N., Rei, W. (2012). A hybrid genetic algorithm for multidepot and periodic vehicle routing problems. <i>Operations Research</i> 60(3):611–624. <a href="https://doi.org/10.1287/opre.1120.1048">10.1287/opre.1120.1048</a></li>
+<li id="r29">Vidal, T., Crainic, T.G., Gendreau, M., Prins, C. (2013). Heuristics for multi-attribute vehicle routing problems: A survey and synthesis. <i>European Journal of Operational Research</i> 231(1):1–21. <a href="https://doi.org/10.1016/j.ejor.2013.02.053">10.1016/j.ejor.2013.02.053</a></li>
+<li id="r30">Vidal, T., Crainic, T.G., Gendreau, M., Prins, C. (2014). A unified solution framework for multi-attribute vehicle routing problems. <i>European Journal of Operational Research</i> 234(3):658–673. <a href="https://doi.org/10.1016/j.ejor.2013.09.045">10.1016/j.ejor.2013.09.045</a></li>
+<li id="r31">Vidal, T. (2022). Hybrid genetic search for the CVRP: Open-source implementation and SWAP* neighborhood. <i>Computers &amp; Operations Research</i> 140:105643. <a href="https://doi.org/10.1016/j.cor.2021.105643">10.1016/j.cor.2021.105643</a> (preprint: <a href="https://arxiv.org/abs/2012.10384">arXiv:2012.10384</a>)</li>
+<li id="r32">Wouda, N.A., Lan, L., Kool, W. (2024). PyVRP: A high-performance VRP solver package. <i>INFORMS Journal on Computing</i> 36(4):943–955. <a href="https://doi.org/10.1287/ijoc.2023.0055">10.1287/ijoc.2023.0055</a></li>
+</ol>
+<h3 id="refs-methods">8.2 Sources of the search methods (section 4.E)</h3>
+<p class="small">Each entry is the id target of the "Literature" column of the table in section 4.E and of the reference links in the Solver (<code>learn.html#ref-&lt;key&gt;</code>). Four further sources of that table (Christiaens &amp; Vanden Berghe, Ropke &amp; Pisinger, Pisinger &amp; Ropke, Vidal et al.) are items [5], [21], [18] and [28] of the list above. Most are the original papers of a method; a few are the closest published description of the scheme as it is used for routing (for example Prins 2004 for the split decoding, Ruiz &amp; Stützle 2007 for iterated greedy, which was proposed for flow-shop scheduling).</p>
+<div class="refs"><ol start="33">
+<li id="ref-ai2009">Ai, T.J., Kachitvichyanukul, V. (2009). A particle swarm optimization for the vehicle routing problem with simultaneous pickup and delivery. <i>Computers &amp; Operations Research</i> 36(5):1693–1702. <a href="https://doi.org/10.1016/j.cor.2008.04.003">10.1016/j.cor.2008.04.003</a></li>
+<li id="ref-andrade2021">Andrade, C.E., Toso, R.F., Gonçalves, J.F., Resende, M.G.C. (2021). The multi-parent biased random-key genetic algorithm with implicit path-relinking and its real-world applications. <i>European Journal of Operational Research</i> 289(1):17–30. <a href="https://doi.org/10.1016/j.ejor.2019.11.037">10.1016/j.ejor.2019.11.037</a> (software, not a search-method source)</li>
+<li id="ref-bean1994">Bean, J.C. (1994). Genetic algorithms and random keys for sequencing and optimization. <i>ORSA Journal on Computing</i> 6(2):154–160. <a href="https://doi.org/10.1287/ijoc.6.2.154">10.1287/ijoc.6.2.154</a></li>
+<li id="ref-bullnheimer1999">Bullnheimer, B., Hartl, R.F., Strauss, C. (1999). An improved ant system algorithm for the vehicle routing problem. <i>Annals of Operations Research</i> 89:319–328. (DOI not confirmed; none given.)</li>
+<li id="ref-dueck1993">Dueck, G. (1993). New optimization heuristics: the great deluge algorithm and the record-to-record travel. <i>Journal of Computational Physics</i> 104(1):86–92. <a href="https://doi.org/10.1006/jcph.1993.1010">10.1006/jcph.1993.1010</a></li>
+<li id="ref-dueck1990">Dueck, G., Scheuer, T. (1990). Threshold accepting: a general purpose optimization algorithm appearing superior to simulated annealing. <i>Journal of Computational Physics</i> 90(1):161–175. <a href="https://doi.org/10.1016/0021-9991(90)90201-B">10.1016/0021-9991(90)90201-B</a></li>
+<li id="ref-feo1995">Feo, T.A., Resende, M.G.C. (1995). Greedy randomized adaptive search procedures. <i>Journal of Global Optimization</i> 6(2):109–133. <a href="https://doi.org/10.1007/BF01096763">10.1007/BF01096763</a></li>
+<li id="ref-gendreau1994">Gendreau, M., Hertz, A., Laporte, G. (1994). A tabu search heuristic for the vehicle routing problem. <i>Management Science</i> 40(10):1276–1290. <a href="https://doi.org/10.1287/mnsc.40.10.1276">10.1287/mnsc.40.10.1276</a></li>
+<li id="ref-glover1989">Glover, F. (1989). Tabu search – Part I. <i>ORSA Journal on Computing</i> 1(3):190–206. <a href="https://doi.org/10.1287/ijoc.1.3.190">10.1287/ijoc.1.3.190</a></li>
+<li id="ref-glover1998">Glover, F. (1998). A template for scatter search and path relinking. In: Hao, J.-K. et al. (eds), <i>Artificial Evolution (AE 1997)</i>, LNCS 1363, Springer, pp. 1–51. <a href="https://doi.org/10.1007/BFb0026589">10.1007/BFb0026589</a></li>
+<li id="ref-goncalves2011">Gonçalves, J.F., Resende, M.G.C. (2011). Biased random-key genetic algorithms for combinatorial optimization. <i>Journal of Heuristics</i> 17(5):487–525. <a href="https://doi.org/10.1007/s10732-010-9143-1">10.1007/s10732-010-9143-1</a></li>
+<li id="ref-kennedy1995">Kennedy, J., Eberhart, R. (1995). Particle swarm optimization. In: <i>Proceedings of ICNN'95 – International Conference on Neural Networks</i>, vol. 4, pp. 1942–1948. <a href="https://doi.org/10.1109/ICNN.1995.488968">10.1109/ICNN.1995.488968</a></li>
+<li id="ref-kirkpatrick1983">Kirkpatrick, S., Gelatt, C.D., Vecchi, M.P. (1983). Optimization by simulated annealing. <i>Science</i> 220(4598):671–680. <a href="https://doi.org/10.1126/science.220.4598.671">10.1126/science.220.4598.671</a></li>
+<li id="ref-kytojoki2007">Kytöjoki, J., Nuortio, T., Bräysy, O., Gendreau, M. (2007). An efficient variable neighborhood search heuristic for very large scale vehicle routing problems. <i>Computers &amp; Operations Research</i> 34(9):2743–2757. <a href="https://doi.org/10.1016/j.cor.2005.10.010">10.1016/j.cor.2005.10.010</a></li>
+<li id="ref-lourenco2003">Lourenço, H.R., Martin, O.C., Stützle, T. (2003). Iterated local search. In: Glover, F., Kochenberger, G.A. (eds), <i>Handbook of Metaheuristics</i>, Kluwer/Springer, pp. 320–353. <a href="https://doi.org/10.1007/0-306-48056-5_11">10.1007/0-306-48056-5_11</a></li>
+<li id="ref-marti2006">Martí, R., Laguna, M., Glover, F. (2006). Principles of scatter search. <i>European Journal of Operational Research</i> 169(2):359–372. <a href="https://doi.org/10.1016/j.ejor.2004.08.004">10.1016/j.ejor.2004.08.004</a></li>
+<li id="ref-marti2013">Martí, R., Resende, M.G.C., Ribeiro, C.C. (2013). Multi-start methods for combinatorial optimization. <i>European Journal of Operational Research</i> 226(1):1–8. <a href="https://doi.org/10.1016/j.ejor.2012.10.012">10.1016/j.ejor.2012.10.012</a></li>
+<li id="ref-mladenovic1997">Mladenović, N., Hansen, P. (1997). Variable neighborhood search. <i>Computers &amp; Operations Research</i> 24(11):1097–1100. <a href="https://doi.org/10.1016/S0305-0548(97)00031-2">10.1016/S0305-0548(97)00031-2</a></li>
+<li id="ref-osman1993">Osman, I.H. (1993). Metastrategy simulated annealing and tabu search algorithms for the vehicle routing problem. <i>Annals of Operations Research</i> 41(4):421–451. <a href="https://doi.org/10.1007/BF02023004">10.1007/BF02023004</a></li>
+<li id="ref-prins2004">Prins, C. (2004). A simple and effective evolutionary algorithm for the vehicle routing problem. <i>Computers &amp; Operations Research</i> 31(12):1985–2002. <a href="https://doi.org/10.1016/S0305-0548(03)00158-8">10.1016/S0305-0548(03)00158-8</a></li>
+<li id="ref-prins2006">Prins, C., Prodhon, C., Wolfler Calvo, R. (2006). Solving the capacitated location-routing problem by a GRASP complemented by a learning process and a path relinking. <i>4OR</i> 4(3):221–238. <a href="https://doi.org/10.1007/s10288-006-0001-9">10.1007/s10288-006-0001-9</a></li>
+<li id="ref-resende2005">Resende, M.G.C., Ribeiro, C.C. (2005). GRASP with path-relinking: recent advances and applications. In: Ibaraki, T., Nonobe, K., Yagiura, M. (eds), <i>Metaheuristics: Progress as Real Problem Solvers</i>, Springer, pp. 29–63. <a href="https://doi.org/10.1007/0-387-25383-1_2">10.1007/0-387-25383-1_2</a></li>
+<li id="ref-ruiz2007">Ruiz, R., Stützle, T. (2007). A simple and effective iterated greedy algorithm for the permutation flowshop scheduling problem. <i>European Journal of Operational Research</i> 177(3):2033–2049. <a href="https://doi.org/10.1016/j.ejor.2005.12.009">10.1016/j.ejor.2005.12.009</a></li>
+<li id="ref-shaw1998">Shaw, P. (1998). Using constraint programming and local search methods to solve vehicle routing problems. In: Maher, M., Puget, J.-F. (eds), <i>Principles and Practice of Constraint Programming – CP98</i>, LNCS 1520, Springer, pp. 417–431. (DOI not confirmed; none given.)</li>
+<li id="ref-storn1997">Storn, R., Price, K. (1997). Differential evolution – a simple and efficient heuristic for global optimization over continuous spaces. <i>Journal of Global Optimization</i> 11(4):341–359. <a href="https://doi.org/10.1023/A:1008202821328">10.1023/A:1008202821328</a></li>
+<li id="ref-stutzle2000">Stützle, T., Hoos, H.H. (2000). MAX–MIN Ant System. <i>Future Generation Computer Systems</i> 16(8):889–914. <a href="https://doi.org/10.1016/S0167-739X(00)00043-1">10.1016/S0167-739X(00)00043-1</a></li>
+<li id="ref-wouda2023">Wouda, N.A., Lan, L. (2023). ALNS: a Python implementation of the adaptive large neighbourhood search metaheuristic. <i>Journal of Open Source Software</i> 8(81):5028. <a href="https://doi.org/10.21105/joss.05028">10.21105/joss.05028</a> (software, not a search-method source)</li>
+</ol></div>
+<p class="small">Web resources: CVRPLib (galgos.inf.puc-rio.br/cvrplib), including the BKS Challenge page; arXiv:2601.11467 (the XL instances); NEO VRP pages (neo.lcc.uma.es/vrp); STOM-Group/MDVRP-Instances; SINTEF TOP. Citation details were checked against Crossref (DOIs) or the publisher / index pages; for Shaw (1998) and Bullnheimer et al. (1999) we could not confirm a DOI and give none; the cited statements are paraphrased from the abstracts, README files and results tables we could read, not from every full text.</p>
+</div>
+</main>
+<footer>VRP-Learn · MIT licence · Educational implementation; see the README for scope and limitations.</footer>
+<script src="assets/vrp.js"></script>
+<script src="assets/methods.js"></script>
+<script src="assets/viz.js"></script>
+<script src="assets/figures.js"></script>
+<script src="assets/anim.js"></script>
+<script src="assets/explorers.js"></script>
+<script src="assets/catalogue.js"></script>
+</body>
+</html>
