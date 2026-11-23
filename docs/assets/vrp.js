@@ -800,10 +800,83 @@
   /* One independent run (construction + metaheuristic) that can be advanced in time slices, so that a Web Worker or the
    * page itself can interleave it with message handling.  cfg: {construct: 'savings'|'sweep'|'nn', mode: 'sisr'|'ils',
    * iters, seed, ops, k}.  poll(ms) returns a progress message; result() the final one. */
+  /* ---- custom methods ---------------------------------------------------------------------------------------------
+   * A visitor's own method: JavaScript text that defines
+   *     function customMethod(api, start) { ...; return function step() { ... }; }
+   * customMethod is called once per run with a feasible start solution; the returned function performs one iteration and
+   * is called until the budget ends.  Solutions are { routes: [ { d: depot index, nodes: [customer indices] }, ... ] } with
+   * customers 0..n-1 and depots 0..t-1.  The method tells the engine about solutions with api.report(solution); the engine
+   * checks every reported solution itself and keeps the best feasible one, so a wrong cost cannot be claimed.
+   * The code is compiled only here; the page runs it in a Web Worker without network access (see worker.js and solver.js). */
+  function compileCustom(code) {
+    if (typeof code !== 'string' || !code.trim()) throw new Error('the custom method is empty');
+    if (code.length > 200000) throw new Error('the custom method is longer than 200 000 characters');
+    let make;
+    try { make = new Function('"use strict";\n' + code + '\n;return typeof customMethod === "function" ? customMethod : null;')(); }
+    catch (e) { throw new Error('custom method does not compile: ' + (e && e.message || e)); }
+    if (!make) throw new Error('custom method: the code must define  function customMethod(api, start)');
+    return function (env, init) {
+      const I = env.I, N = I.N, n = I.n, t = I.t;
+      const norm = (sol, what) => {                                    // structural check; returns a clean copy
+        if (!sol || !Array.isArray(sol.routes)) throw new Error('custom method: ' + what + ' needs a solution { routes: [ { d, nodes: [...] } ] }');
+        const routes = [];
+        for (const r of sol.routes) {
+          if (!r || !Array.isArray(r.nodes)) throw new Error('custom method: ' + what + ': every route needs a nodes array');
+          const d = r.d === undefined ? 0 : r.d;
+          if (!Number.isInteger(d) || d < 0 || d >= t) throw new Error('custom method: ' + what + ': depot index ' + d + ' is not in 0..' + (t - 1));
+          for (const c of r.nodes) if (!Number.isInteger(c) || c < 0 || c >= n) throw new Error('custom method: ' + what + ': customer index ' + c + ' is not in 0..' + (n - 1));
+          if (r.nodes.length) routes.push({ d, nodes: r.nodes.slice() });
+        }
+        return { routes };
+      };
+      const nodesOf = (d, nodes, what) => norm({ routes: [{ d, nodes }] }, what).routes[0] || { d, nodes: [] };
+      const ops = (env.cfg.ops && env.cfg.ops.length ? env.cfg.ops : PRESETS.full).filter(o => t > 1 || (o !== 'routedepot' && o !== 'depotswap'));
+      let nb = null;
+      const arr = a => Object.freeze(Array.from(a));
+      const instance = Object.freeze({
+        name: I.name, customers: n, depots: t, demand: arr(I.dem), service: arr(I.srv), capacity: arr(I.Q), maxDuration: arr(I.Dmax), fleet: arr(I.fleet),
+        x: arr(I.x), y: arr(I.y),                                      // customers first, then depots
+        dist: (i, j) => I.D[i * N + j],                                // nodes: customers 0..n-1, depot d is node n + d
+        depotNode: d => n + d
+      });
+      const api = Object.freeze({
+        instance, iterations: env.iters,
+        get iteration() { return env.it; },
+        random: env.rand,
+        randomInt: k => Math.floor(env.rand() * k),
+        copy: sol => norm(sol, 'copy()'),
+        cost: sol => solCost(I, norm(sol, 'cost()')),
+        violations: sol => violations(I, norm(sol, 'violations()')),
+        feasible: sol => violations(I, norm(sol, 'feasible()')).length === 0,
+        routeCost: (d, nodes) => { const r = nodesOf(d, nodes, 'routeCost()'); return rCost(I, r.d, r.nodes); },
+        routeFeasible: (d, nodes) => { const r = nodesOf(d, nodes, 'routeFeasible()'); return feasibleRoute(I, r.d, r.nodes); },
+        nearestDepot: c => nearestDepot(I, nodesOf(0, [c], 'nearestDepot()').nodes[0]),
+        savings: () => copySol(savings(I)),
+        localSearch: sol => {
+          const s = norm(sol, 'localSearch()');
+          if (violations(I, s).length) throw new Error('custom method: localSearch() needs a feasible solution');
+          return localSearch(I, s, { ops, nb: nb || (nb = neighbours(I, env.cfg.k || 12)), rand: env.rand }).sol;
+        },
+        report: sol => {
+          const s = norm(sol, 'report()');
+          if (violations(I, s).length) { env.stats.rejectedReports = (env.stats.rejectedReports || 0) + 1; return false; }
+          return env.offer(s, solCost(I, s));
+        },
+        best: () => copySol(env.bestSol),
+        bestCost: () => solCost(I, env.bestSol)
+      });
+      const body = make(api, copySol(init));
+      const step = typeof body === 'function' ? body : body && typeof body.step === 'function' ? () => body.step() : null;
+      if (!step) throw new Error('custom method: customMethod must return a function that performs one iteration (or an object with a step function)');
+      return { one: step };
+    };
+  }
+  function setCustom(code) { engines.custom = compileCustom(code); }
+
   function createJob(I, cfg) {
     const init = cfg.construct === 'sweep' ? sweep(I) : cfg.construct === 'nn' ? nearestNeighbour(I) : savings(I);
     const initCost = solCost(I, init) + PEN * excess(I, init);
-    const S = createSearch(I, init, { mode: cfg.mode, iters: cfg.iters, seed: cfg.seed, ops: cfg.ops, k: cfg.k, params: cfg.params });
+    const S = createSearch(I, init, { mode: cfg.mode, iters: cfg.iters, seed: cfg.seed, ops: cfg.ops, k: cfg.k, params: cfg.params, chunk: cfg.mode === 'custom' ? 1 : undefined });
     let sent = 0, sentBest = Infinity;
     const progress = done => {
       const m = { iter: S.iter, total: S.total, seconds: S.seconds, cost: S.bestCost, initCost, hist: S.hist.slice(sent), done };
@@ -822,6 +895,6 @@
   }
 
   return { mulberry32, parseInstance, parseCordeau, parseVRPLIB, parseCSV, parseMatrixTable, checkMatrix, layoutFromMatrix, haversineKm, generate, finish, solCost, rCost, violations, savings, sweep, nearestNeighbour,
-    localSearch, neighbours, createSearch, createJob, copySol, OPS, PRESETS, excess, repairFleet, engines, METHODS: {},
+    localSearch, neighbours, createSearch, createJob, compileCustom, setCustom, copySol, OPS, PRESETS, excess, repairFleet, engines, METHODS: {},
     internals: { LS, rCost, solCost, excess, copySol, feasibleRoute, neighbours, localSearch, repairFleet, nearestDepot, mulberry32, load, now, PEN, EPS, INF, PRESETS, ruinRecreate } };
 });

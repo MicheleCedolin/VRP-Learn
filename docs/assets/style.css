@@ -178,3 +178,6 @@ body:not(.simple) .simpleonly { display: none; }
   .mrow { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "eq no" "q q" "note note"; }
   .mq { white-space: normal; overflow-x: auto; }
 }
+
+/* custom method box */
+#customCode { width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem; line-height: 1.35; tab-size: 2; white-space: pre; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: .45rem .5rem; background: var(--bg, #fff); color: inherit; resize: vertical; }

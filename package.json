@@ -5,7 +5,7 @@
   "description": "Browser solver and learning guide for the vehicle routing problem (CVRP / MDVRP)",
   "license": "MIT",
   "scripts": {
-    "test": "node tests/js_unit.cjs && node tests/js_methods.cjs && node tests/site_data.cjs && node tests/learn_refs.cjs",
+    "test": "node tests/js_unit.cjs && node tests/js_methods.cjs && node tests/site_data.cjs && node tests/custom_method.cjs && node tests/learn_refs.cjs",
     "catalogue": "node scripts/catalogue_site.mjs",
     "math": "node scripts/render_math.mjs"
   },

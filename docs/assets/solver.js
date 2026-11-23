@@ -11,7 +11,11 @@
     twoopt: '2-opt (intra-route)', twooptstar: '2-opt* (route tails)', routedepot: 'Route → other depot', depotswap: 'Depot swap (2 routes)',
   };
   const EFFORT_S = { quick: 2, standard: 6, long: 25 };             // compute seconds per run; the iteration budget is calibrated to it (VRP.calibrate)
-  const GROUPS = ['A', 'B', 'C', 'D', 'E'], CORE = ['sisr', 'sa', 'tabu', 'vns', 'alns', 'ga'], MIDS = Object.keys(VRP.METHODS), REF = VRP.REF_SHORT || {};
+  /* the visitor's own method: listed like the built-in ones, but its code runs only in sandboxed workers (see sandboxWorker) */
+  VRP.METHODS.custom = { group: 'X', label: 'Custom (your code)', unit: 'one call of your step function', params: 'none', refs: [],
+    desc: 'Your own JavaScript method from the box “Your own method” below. The Solver checks every solution it reports and keeps the best feasible one.' };
+  VRP.METHOD_GROUPS.X = 'Your own method';
+  const GROUPS = ['A', 'B', 'C', 'D', 'E', 'X'], CORE = ['sisr', 'sa', 'tabu', 'vns', 'alns', 'ga'], MIDS = Object.keys(VRP.METHODS), REF = VRP.REF_SHORT || {};
   const MCOL = i => css('--c' + (i % 6 + 1)), MDASH = [[], [7, 3], [2, 3]];          // colour and dash style of the i-th compared method (6 colours x 3 dashes)
   const catalogue = window.VRP_INSTANCES || [];
 
@@ -56,7 +60,7 @@
   function describeMethod() {
     const m = VRP.METHODS[$('method').value];
     const refs = m.refs.map(k => '<a href="learn.html#ref-' + k + '">' + (REF[k] || k) + '</a>').join('; ');
-    $('methodDesc').innerHTML = m.desc + ' <i>One iteration = ' + m.unit + '.</i> Defaults: ' + m.params + '. ' + (refs ? '<span class="refs">' + refs + '</span>' : '<span class="refs">Control baseline, not a published method.</span>');
+    $('methodDesc').innerHTML = m.desc + ' <i>One iteration = ' + m.unit + '.</i> Defaults: ' + m.params + '. ' + (refs ? '<span class="refs">' + refs + '</span>' : $('method').value === 'custom' ? '' : '<span class="refs">Control baseline, not a published method.</span>');
   }
   function updateEst() {
     const cmp = $('compare').checked, ms = cmp ? cmpSelected().length : 1, R = clamp(Math.round(+$('runs').value) || 1, 1, 50), W = clamp(Math.round(+$('workers').value) || 1, 1, 16), secs = EFFORT_S[$('effort').value];
@@ -76,7 +80,7 @@
   }
   $('method').addEventListener('change', describeMethod);
   $('compare').addEventListener('change', setMode);
-  $('cmpAll').addEventListener('click', () => setCmp(MIDS));
+  $('cmpAll').addEventListener('click', () => setCmp(MIDS.filter(id => id !== 'custom')));      // all built-in methods
   $('cmpCore').addEventListener('click', () => setCmp(CORE));
   $('cmpNone').addEventListener('click', () => setCmp([]));
   $('cmpList').addEventListener('change', updateEst);
@@ -184,15 +188,29 @@
   const shownRun = () => (viewIdx >= 0 && runs[viewIdx] && runs[viewIdx].sol ? runs[viewIdx] : bestRun(solving ? runs : statRuns()));
 
   /* iterations whose run takes about `secs` of compute: a short timing run of the method itself, in a worker (inline when workers are unavailable) */
+  /* A worker for sessions that contain custom code. It is started from a Blob, so it inherits the Content-Security-Policy of
+   * this page (connect-src 'self': the code cannot send data to another host), and worker.js removes the network interfaces
+   * before compiling the code. Custom code never runs in the page itself. */
+  function sandboxWorker() {
+    const base = new URL('assets/', location.href).href;
+    const src = 'importScripts(' + ['vrp.js', 'methods.js', 'worker.js'].map(f => JSON.stringify(base + f)).join(', ') + ');';
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    const w = new Worker(url); setTimeout(() => URL.revokeObjectURL(url), 10000); return w;
+  }
+  const CUSTOM_SILENCE_MS = 15000;                  // a custom method that does not answer for this long is stopped
   function calibrate(id, secs, base) {
+    const custom = id === 'custom';
     return new Promise((resolve, reject) => {
-      const inline = () => { try { resolve(VRP.calibrate(I, id, secs, { ops: base.ops, k: base.k })); } catch (e) { reject(e); } };
-      if (calW === null) { try { calW = new Worker('assets/worker.js'); } catch (e) { calW = false; } }
+      const inline = () => { if (custom) { reject(new Error('custom methods need Web Workers, which are not available here')); return; }
+        try { resolve(VRP.calibrate(I, id, secs, { ops: base.ops, k: base.k })); } catch (e) { reject(e); } };
+      if (calW === null) { try { calW = base.code ? sandboxWorker() : new Worker('assets/worker.js'); } catch (e) { calW = false; } }
       if (!calW) { setTimeout(inline, 0); return; }
       const reqId = ++calReq, w = calW;
-      w.onmessage = ev => { const m = ev.data; if (m.reqId !== reqId) return; if (m.type === 'calibrated') resolve(m.iters); else reject(new Error(m.message)); };
-      w.onerror = ev => { if (ev.preventDefault) ev.preventDefault(); try { w.terminate(); } catch (e) { /* ignore */ } if (calW === w) calW = false; inline(); };
-      w.postMessage({ type: 'calibrate', reqId, I: calSent === w ? undefined : I, mode: id, seconds: secs, ops: base.ops, k: base.k }); calSent = w;     // the instance travels once per worker
+      const guard = custom ? setTimeout(() => { try { w.terminate(); } catch (e) { /* ignore */ } if (calW === w) { calW = null; calSent = null; }
+        reject(new Error('the custom method did not answer for ' + CUSTOM_SILENCE_MS / 1000 + ' s (endless loop, or one iteration takes too long)')); }, CUSTOM_SILENCE_MS) : 0;
+      w.onmessage = ev => { const m = ev.data; if (m.reqId !== reqId) return; clearTimeout(guard); if (m.type === 'calibrated') resolve(m.iters); else reject(new Error(m.message)); };
+      w.onerror = ev => { if (ev.preventDefault) ev.preventDefault(); clearTimeout(guard); try { w.terminate(); } catch (e) { /* ignore */ } if (calW === w) calW = false; inline(); };
+      w.postMessage({ type: 'calibrate', reqId, I: calSent === w ? undefined : I, mode: id, seconds: secs, ops: base.ops, k: base.k, code: custom ? base.code : undefined }); calSent = w;     // the instance travels once per worker
     });
   }
   function dropCalWorker() { if (calW) { try { calW.terminate(); } catch (e) { /* ignore */ } } calW = null; calSent = null; }
@@ -203,7 +221,11 @@
     const R = clamp(Math.round(+$('runs').value) || 1, 1, 50), seed0 = Math.round(+$('seed').value) || 0;
     const cmp = $('compare').checked, methods = cmp ? cmpSelected() : [$('method').value];
     if (!methods.length) { status('Select at least one method to compare.'); return; }
+    const code = methods.includes('custom') ? $('customCode').value : '';
+    if (methods.includes('custom') && !code.trim()) { $('customBox').open = true; status('The custom method is empty: paste your code into “Your own method” (or press “Load the example”) first.'); return; }
     const effort = $('effort').value, base = { construct: $('construct').value, ops: selectedOps(), k: clamp(+$('k').value || 12, 3, 40) };
+    const calBase = Object.assign({ code }, base);
+    dropCalWorker();
     const my = ++session;
     solving = true; cmpMode = methods.length > 1; cmpIds = methods.slice(); hiMethod = null; runs = []; viewIdx = -1; tStart = performance.now();
     $('solve').disabled = true; $('stop').disabled = false; $('prog').hidden = true;
@@ -217,7 +239,7 @@
         const secs = EFFORT_S[effort] || EFFORT_S.standard;
         for (let i = 0; i < methods.length; i++) {
           status('Sizing the budget of ' + methods[i] + ' to about ' + secs + ' s per run (' + (i + 1) + '/' + methods.length + ')…');
-          iters[methods[i]] = await calibrate(methods[i], secs, base);
+          iters[methods[i]] = await calibrate(methods[i], secs, calBase);
           if (my !== session) return;
         }
         if (!cmpMode) $('iters').value = iters[methods[0]];
@@ -232,9 +254,9 @@
     methods.forEach(m => { for (let i = 0; i < R; i++) runs.push({ idx: idx++, k: i + 1, method: m, seed: seed0 + i, status: 'queued', hist: [], iter: 0, total: iters[m], iters: iters[m], cost: NaN, sol: null, seconds: 0 }); });
     const total = runs.length;
     $('prog').hidden = false; $('prog').max = total; $('prog').value = 0;
-    const jobs = runs.slice().sort((a, b) => a.k - b.k || a.idx - b.idx).map(r => ({ id: r.idx, cfg: Object.assign({}, base, { mode: r.method, iters: r.iters, seed: r.seed }) }));   // run 1 of every method first, so a stopped session still compares all methods
+    const jobs = runs.slice().sort((a, b) => a.k - b.k || a.idx - b.idx).map(r => ({ id: r.idx, cfg: Object.assign({}, base, { mode: r.method, iters: r.iters, seed: r.seed }, r.method === 'custom' ? { code } : {}) }));   // run 1 of every method first, so a stopped session still compares all methods
     const conc = clamp(Math.round(+$('workers').value) || 1, 1, Math.min(16, total));
-    runner = startRunner(I, jobs, conc, {
+    runner = startRunner(I, jobs, conc, !!code, {
       onStart: id => { runs[id].status = 'running'; schedule(); },
       onProgress: (id, m) => {
         const r = runs[id]; r.status = 'running'; r.hist = r.hist.concat(m.hist); r.iter = m.iter; r.total = m.total; r.seconds = m.seconds; r.cost = m.cost; r.initCost = m.initCost;
@@ -242,6 +264,7 @@
       },
       onDone: (id, m) => {
         const r = runs[id]; r.status = m.stopped ? 'stopped' : 'done'; r.sol = m.sol; r.cost = m.cost; r.violations = m.violations; r.iter = m.iter; r.total = m.total;
+        if (r.method === 'custom') { r.cost = VRP.solCost(I, m.sol); r.violations = VRP.violations(I, m.sol); }      // custom results are checked again in the page
         r.seconds = m.seconds; r.hist = m.hist; r.stats = m.stats; r.initCost = m.initCost; r.toBest = m.hist[m.hist.length - 1][2] / 1000; checkAllDone(); schedule();
       },
       onError: (id, msg) => { runs[id].status = 'error'; runs[id].error = msg; checkAllDone(); schedule(); },
@@ -277,15 +300,20 @@
   $('stop').addEventListener('click', () => stopSolve(false));
 
   /* ------------------------------------------------------------------ runner: Web Workers, or in-page time slices */
-  function startRunner(I, jobs, conc, h) {
-    let pending = jobs.slice(), alive = true, workers = [], inline = false, cur = null;
+  function startRunner(I, jobs, conc, sandbox, h) {
+    let pending = jobs.slice(), alive = true, workers = [], inline = false, cur = null, watch = 0;
+    const isCustom = j => j && j.cfg.mode === 'custom';
     const inflight = new Map(), seen = new Set();
     function runInline() {
       inline = true; workers.forEach(w => w.terminate()); workers = [];
       pending = Array.from(inflight.values()).concat(pending); inflight.clear();
       const tick = () => {
         if (!alive) return;
-        if (!cur) { const j = pending.shift(); if (!j) return; cur = { id: j.id, job: VRP.createJob(I, j.cfg) }; h.onStart(j.id); }
+        if (!cur) {
+          const j = pending.shift(); if (!j) return;
+          if (isCustom(j)) { h.onStart(j.id); h.onError(j.id, 'custom methods need Web Workers, which are not available here'); setTimeout(tick, 0); return; }   // never in the page
+          cur = { id: j.id, job: VRP.createJob(I, j.cfg) }; h.onStart(j.id);
+        }
         const m = cur.job.poll(40);
         if (m.done) { const id = cur.id, res = cur.job.result(false); cur = null; h.onDone(id, res); } else h.onProgress(cur.id, m);
         setTimeout(tick, 0);
@@ -296,13 +324,14 @@
       if (!alive) { w.terminate(); workers = workers.filter(x => x !== w); return; }
       const j = pending.shift();
       if (!j) { w.terminate(); workers = workers.filter(x => x !== w); return; }
-      inflight.set(j.id, j); h.onStart(j.id);
+      inflight.set(j.id, j); h.onStart(j.id); w.job = j; w.last = performance.now();
       w.postMessage({ type: 'job', jobId: j.id, I, cfg: j.cfg });
     }
     function spawn() {
-      let w; try { w = new Worker('assets/worker.js'); } catch (e) { return false; }
+      let w; try { w = sandbox ? sandboxWorker() : new Worker('assets/worker.js'); } catch (e) { return false; }
       w.onmessage = ev => {
-        const m = ev.data; seen.add(m.jobId);
+        const m = ev.data; seen.add(m.jobId); w.last = performance.now();
+        if (m.type !== 'progress') w.job = null;
         if (m.type === 'progress') h.onProgress(m.jobId, m);
         else if (m.type === 'done') { inflight.delete(m.jobId); h.onDone(m.jobId, m); feed(w); }
         else if (m.type === 'error') { inflight.delete(m.jobId); h.onError(m.jobId, m.message); feed(w); }
@@ -312,13 +341,22 @@
     }
     for (let i = 0; i < conc; i++) { if (!spawn()) break; }
     if (!workers.length) runInline(); else workers.slice().forEach(feed);
+    if (sandbox) watch = setInterval(() => {                       // a custom method that hangs is stopped and its worker replaced
+      if (inline) return;
+      workers.slice().forEach(w => {
+        if (!isCustom(w.job) || performance.now() - w.last < CUSTOM_SILENCE_MS) return;
+        const j = w.job; w.terminate(); workers = workers.filter(x => x !== w); inflight.delete(j.id);
+        h.onError(j.id, 'the custom method did not answer for ' + CUSTOM_SILENCE_MS / 1000 + ' s (endless loop, or one iteration takes too long)');
+        if (alive && spawn()) feed(workers[workers.length - 1]);
+      });
+    }, 1000);
     return {
       stop() {
         alive = false; pending = [];
         workers.forEach(w => w.postMessage({ type: 'stop' }));
         if (inline && cur) { const id = cur.id, res = cur.job.result(true); cur = null; h.onDone(id, res); }
       },
-      terminate() { alive = false; workers.forEach(w => w.terminate()); workers = []; },
+      terminate() { alive = false; clearInterval(watch); workers.forEach(w => w.terminate()); workers = []; },
     };
   }
 
@@ -639,6 +677,17 @@
     download('vrp-matrix-template.csv', ',' + names.join(',') + '\n' + p.map((a, i) => names[i] + ',' + p.map(b => (Math.round(Math.hypot(a[0] - b[0], a[1] - b[1]) * 10) / 10)).join(',')).join('\n') + '\n', 'text/csv');
   });
 
+  /* custom method box: example, file, and a reminder that the code runs locally */
+  $('customExample').addEventListener('click', async () => {
+    try { const r = await fetch('data/custom-method-template.js'); if (!r.ok) throw new Error('HTTP ' + r.status); $('customCode').value = await r.text(); status('Example loaded into “Your own method”. Choose “Custom (your code)” as the method and press Solve.'); }
+    catch (e) { status('Could not load the example: ' + e.message); }
+  });
+  $('customFile').addEventListener('change', async () => {
+    const f = $('customFile').files[0]; if (!f) return;
+    if (f.size > 200000) { status('The file is larger than 200 KB; a custom method should be a short script.'); return; }
+    $('customCode').value = await f.text(); status('Loaded ' + f.name + ' into “Your own method”.');
+  });
+
   /* Simple / Expert: Simple hides the settings a first-time user does not need (class "adv"); the hidden controls keep their defaults. */
   function setUiMode(m) {
     document.body.classList.toggle('simple', m !== 'expert');
@@ -669,7 +718,7 @@
     if (q.get('iters')) { $('iters').value = q.get('iters'); $('effort').value = 'custom'; }
     if (q.get('compare')) {
       const c = q.get('compare'); $('compare').checked = true; setMode();
-      setCmp(c === 'all' ? MIDS : c === 'core' || c === '1' ? CORE : c.split(',').filter(x => VRP.METHODS[x]));
+      setCmp(c === 'all' ? MIDS.filter(id => id !== 'custom') : c === 'core' || c === '1' ? CORE : c.split(',').filter(x => VRP.METHODS[x]));
     }
     if (q.get('runs')) $('runs').value = q.get('runs');
     if (q.get('seed')) $('seed').value = q.get('seed');

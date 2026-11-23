@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- No third-party hosts: scripts, styles, data and workers come from this site only. 'unsafe-eval' and blob: are needed for the
+     "Your own method" box, whose code is compiled inside a worker started from a Blob; that worker inherits this policy, so
+     pasted code cannot contact another host (connect-src 'self'). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' blob:; worker-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'">
 <title>VRP Solver: single- and multi-depot</title>
 <meta name="description" content="Plan delivery routes in your browser: pick an example, generate random customers or upload your own table, press Solve and see the routes. Free, nothing is uploaded.">
 <meta property="og:type" content="website">
@@ -94,6 +98,15 @@
             <select id="effort"><option value="quick">Quick · 2 s</option><option value="standard" selected>Standard · 6 s</option><option value="long">Long · 25 s</option><option value="custom">Custom</option></select></div>
           <div class="adv"><label for="iters">Iterations <span class="small" id="itersNote"></span></label><input id="iters" type="number" min="50" step="50" value="50000"></div>
         </div>
+        <details id="customBox" class="adv">
+          <summary>Your own method (JavaScript)</summary>
+          <p class="small">Write a search method and compare it with the built-in ones at the same compute time: choose <b>Custom (your code)</b> in the method list, or tick it in the comparison. The code defines <code>function customMethod(api, start)</code> that returns a function performing one iteration; the example explains the interface.</p>
+          <div class="btns tight"><button id="customExample" type="button" class="secondary">Load the example</button> <a class="small" href="data/custom-method-template.js" download>Download the template</a></div>
+          <label for="customFile">Load a .js file</label><input id="customFile" type="file" accept=".js,.mjs,.txt,text/javascript,text/plain">
+          <label for="customCode">Code</label>
+          <textarea id="customCode" rows="10" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="function customMethod(api, start) {&#10;  return function step() { /* one iteration */ };&#10;}"></textarea>
+          <p class="small">Your code runs in your browser only, in a separate worker without network access, and the Solver checks cost and feasibility of every solution itself. Results are labelled “Custom”. Run only code that you wrote or understand.</p>
+        </details>
         <details id="opsBox" class="adv">
           <summary>Local-search settings (ILS and every method that applies a descent)</summary>
           <label for="preset">Preset</label>
