@@ -10,6 +10,6 @@
     "math": "node scripts/render_math.mjs"
   },
   "devDependencies": {
-    "katex": "^0.16.47"
+    "katex": "^0.19.1"
   }
 }
