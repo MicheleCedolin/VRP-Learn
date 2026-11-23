@@ -134,13 +134,16 @@
         I = VRP.parseInstance(await r.text(), e.name); entry = e;
       } else if (src === 'file') {
         const f = $('file').files[0]; if (!f) { status('Choose a file first.'); return; }
-        I = VRP.parseInstance(await f.text(), f.name, { capacity: +$('csvQ').value }); entry = null;
+        const mf = $('matrix').files[0], mtext = mf ? await mf.text() : '';
+        I = VRP.parseInstance(await f.text(), f.name, { capacity: +$('csvQ').value, matrix: mtext }); entry = null;
+        if (mf && !(I.meta && I.meta.csv)) throw new Error('a separate distance matrix can only be combined with a CSV table (a .vrp file carries its own distances)');
       } else {
         const t = Math.max(1, +$('t').value);
         I = VRP.generate(clamp(+$('n').value, 10, 400), t, +$('gseed').value, { routeSize: +$('rs').value, clustered: $('clustered').checked }); entry = null;
       }
       runs = []; viewIdx = -1; cmpMode = false; hiMethod = null; setTableMode(); showInfo(); drawAll(); $('solve').disabled = false;
-      status('Loaded ' + I.name + ' (' + I.n + ' customers, ' + I.t + (I.t === 1 ? ' depot' : ' depots') + (I.meta && I.meta.autoCapacity ? ', vehicle capacity set automatically to ' + I.Q[0] : '') + '). Press Solve.' +
+      status('Loaded ' + I.name + ' (' + I.n + ' customers, ' + I.t + (I.t === 1 ? ' depot' : ' depots') + (I.meta && I.meta.autoCapacity ? ', vehicle capacity set automatically to ' + I.Q[0] : '') + (I.meta && I.meta.matrix ? ', distances from the matrix' : I.meta && I.meta.geo ? ', great-circle distances in km' : '') + '). Press Solve.' +
+        (I.meta && I.meta.layout === 'computed' ? ' The map positions are computed from the distances and are approximate.' : '') +
         (I.n > 500 ? ' Large instance: the browser engine is slow beyond about 500 customers, so start with the quick effort.' : ''));
     } catch (e) { status('Could not load the instance: ' + e.message + (src === 'bench' ? ' (examples need the page to be opened from the website, not from a saved file)' : src === 'file' ? '. Check the file against the template.' : '')); }
   }
@@ -158,7 +161,7 @@
       ref = fmt(entry.bks, Number.isInteger(entry.bks) ? 0 : 2) + ' <span class="badge ' + entry.bksStatus + '" title="' + entry.bksNote.replace(/"/g, '&quot;') + '">' +
         (entry.bksStatus === 'verified' ? 'verified' : 'secondary, sanity reference only') + '</span>';
     } else if (entry) ref = 'not verified here <span class="small">(see CVRPLib / NEO)</span>';
-    const rows = [['Customers', n], ['Depots', I.t], ['Capacity Q', Q], ['Vehicles / depot', fleet], ['Max. route duration', dm], ['LB #routes ⌈Σq/Q⌉', lb], ['Best known value', ref]];
+    const rows = [['Customers', n], ['Depots', I.t], ['Capacity Q', Q], ['Vehicles / depot', fleet], ['Max. route duration', dm], ['Distances', I.meta && I.meta.matrix ? 'from the matrix' : I.meta && I.meta.geo ? 'great circle (km)' : I.rounded ? 'straight line, rounded' : 'straight line'], ['LB #routes ⌈Σq/Q⌉', lb], ['Best known value', ref]];
     $('info').innerHTML = rows.map(r => '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>').join('');
   }
 
@@ -627,6 +630,13 @@
   $('dlTemplate').addEventListener('click', ev => {
     ev.preventDefault();
     download('vrp-template.csv', 'name,x,y,demand\nDepot,50,50,0\nCustomer 1,20,70,4\nCustomer 2,35,90,7\nCustomer 3,80,75,3\nCustomer 4,90,40,6\nCustomer 5,65,15,5\nCustomer 6,30,20,2\nCustomer 7,10,45,8\nCustomer 8,55,80,4\n', 'text/csv');
+  });
+
+  $('dlMatrix').addEventListener('click', ev => {                       // distances of the template table, same row order
+    ev.preventDefault();
+    const names = ['Depot'].concat(Array.from({ length: 8 }, (_, i) => 'Customer ' + (i + 1)));
+    const p = [[50, 50], [20, 70], [35, 90], [80, 75], [90, 40], [65, 15], [30, 20], [10, 45], [55, 80]];
+    download('vrp-matrix-template.csv', ',' + names.join(',') + '\n' + p.map((a, i) => names[i] + ',' + p.map(b => (Math.round(Math.hypot(a[0] - b[0], a[1] - b[1]) * 10) / 10)).join(',')).join('\n') + '\n', 'text/csv');
   });
 
   /* Simple / Expert: Simple hides the settings a first-time user does not need (class "adv"); the hidden controls keep their defaults. */

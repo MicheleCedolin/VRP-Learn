@@ -63,8 +63,10 @@
         <div id="boxFile" hidden>
           <label for="file">Your file</label><input id="file" type="file" accept=".csv,.tsv,.txt,.vrp,text/csv,text/plain,*/*">
           <label for="csvQ">Vehicle capacity <span class="small">(for CSV tables; empty = automatic)</span></label><input id="csvQ" type="number" min="1" placeholder="automatic">
-          <p class="small"><b>CSV table:</b> one row per location with the columns <code>x</code>, <code>y</code>, <code>demand</code>. Rows with demand 0 are depots (or add a <code>type</code> column with <code>depot</code>). Distances are straight lines in the units of your coordinates. <a href="#" id="dlTemplate">Download a template</a>.</p>
-          <p class="small adv">Also accepted: CVRPLIB <code>.vrp</code> (single depot) and Cordeau MDVRP files (<code>p01…</code>).</p>
+          <p class="small"><b>CSV table:</b> one row per location with the columns <code>x</code>, <code>y</code>, <code>demand</code>. Rows with demand 0 are depots (or add a <code>type</code> column with <code>depot</code>). Distances are straight lines in the units of your coordinates. With the columns <code>lat</code> and <code>lon</code> instead of <code>x</code> and <code>y</code>, distances are great-circle distances in kilometres. <a href="#" id="dlTemplate">Download a template</a>.</p>
+          <label for="matrix">Your distance matrix <span class="small">(optional, for CSV tables)</span></label><input id="matrix" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain,*/*">
+          <p class="small"><b>Distance matrix:</b> a square table with one row and one column per location, in the order of the rows of your CSV table (for example road distances or travel times from your own tool). It must be symmetric; the <code>x</code> and <code>y</code> columns then only place the points on the map and may be left out. <a href="#" id="dlMatrix">Download a matching template</a>. Nothing is uploaded: your files stay in your browser.</p>
+          <p class="small adv">Also accepted: CVRPLIB <code>.vrp</code> (single depot; <code>EUC_2D</code>, or <code>EXPLICIT</code> with a full or triangular matrix; route-duration limit and service time are read) and Cordeau MDVRP files (<code>p01…</code>).</p>
         </div>
         <div class="btns"><button id="load" type="button">Load instance</button></div>
         <dl id="info" class="info"></dl>

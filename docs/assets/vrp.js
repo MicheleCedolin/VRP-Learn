@@ -22,14 +22,104 @@
   }
 
   /* ------------------------------------------------------------------ instances */
-  function finish(name, n, t, x, y, dem, srv, Q, Dmax, fleet, rounded, meta) {
-    const N = n + t, D = new Float64Array(N * N);
-    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+  /* Dgiven (optional): N x N distances in engine order (customers, then depots); coordinates are then used for the map only. */
+  function finish(name, n, t, x, y, dem, srv, Q, Dmax, fleet, rounded, meta, Dgiven) {
+    const N = n + t, D = Dgiven || new Float64Array(N * N);
+    if (!Dgiven) for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
       let d = Math.hypot(x[i] - x[j], y[i] - y[j]);
       if (rounded) d = Math.floor(d + 0.5);
       D[i * N + j] = d;
     }
     return { name, n, t, N, x, y, dem, srv, Q, Dmax, fleet, D, rounded: !!rounded, meta: meta || {} };
+  }
+
+  /* ---- explicit distance matrices -------------------------------------------------------------------------------
+   * The engine needs symmetric distances (2-opt and 2-opt* reverse route segments), so an asymmetric matrix is rejected.
+   * rows: array of numeric arrays (file order); line(i): text used in messages for row i. Returns a flat Float64Array. */
+  function checkMatrix(rows, N, where) {
+    where = where || (i => 'row ' + (i + 1));
+    if (rows.length !== N) throw new Error('the distance matrix has ' + rows.length + ' rows, but there are ' + N + ' locations (depots and customers)');
+    const M = new Float64Array(N * N);
+    for (let i = 0; i < N; i++) {
+      if (rows[i].length !== N) throw new Error('distance matrix, ' + where(i) + ': ' + rows[i].length + ' values instead of ' + N);
+      for (let j = 0; j < N; j++) {
+        const v = rows[i][j];
+        if (!isFinite(v)) throw new Error('distance matrix, ' + where(i) + ', column ' + (j + 1) + ': not a number');
+        if (v < 0) throw new Error('distance matrix, ' + where(i) + ', column ' + (j + 1) + ': the distance ' + v + ' is negative');
+        M[i * N + j] = v;
+      }
+    }
+    let worst = 0, wi = -1, wj = -1, top = 0;
+    for (let i = 0; i < N; i++) {
+      if (M[i * N + i] !== 0) throw new Error('distance matrix, ' + where(i) + ', column ' + (i + 1) + ': the distance from a location to itself must be 0 (found ' + M[i * N + i] + ')');
+      for (let j = i + 1; j < N; j++) {
+        const a = M[i * N + j], b = M[j * N + i], d = Math.abs(a - b) / Math.max(1, Math.abs(a), Math.abs(b));
+        if (d > worst) { worst = d; wi = i; wj = j; }
+        if (a > top) top = a;
+      }
+    }
+    if (worst > 1e-6) throw new Error('the distance matrix is not symmetric: ' + where(wi) + ', column ' + (wj + 1) + ' is ' + M[wi * N + wj] + ' but ' + where(wj) + ', column ' + (wi + 1) + ' is ' + M[wj * N + wi] +
+      '. One-way (asymmetric) distances are not supported; make the matrix symmetric first, for example with the average of the two directions');
+    if (!(top > 0)) throw new Error('all distances in the matrix are 0');
+    for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) { const m = (M[i * N + j] + M[j * N + i]) / 2; M[i * N + j] = M[j * N + i] = m; }   // remove rounding noise
+    return M;
+  }
+
+  /* square table of distances: comma, semicolon, tab or blanks; an optional header row and label column are skipped */
+  function parseMatrixTable(text) {
+    const lines = [];
+    text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach((l, i) => { const s = l.trim(); if (s && !s.startsWith('#')) lines.push([s, i + 1]); });
+    if (!lines.length) throw new Error('the distance matrix file is empty');
+    const f = lines[0][0], sep = f.includes('\t') ? '\t' : f.includes(';') ? ';' : f.includes(',') ? ',' : null;
+    const cells = l => (sep ? l.split(sep) : l.split(/\s+/)).map(c => c.trim().replace(/^"(.*)"$/, '$1'));
+    const isNum = c => c !== '' && isFinite(Number(sep === ';' ? c.replace(',', '.') : c));
+    let rows = lines.map(([l, ln]) => ({ c: cells(l), ln }));
+    if (!rows[0].c.slice(1).every(isNum)) rows = rows.slice(1);                    // header row with names
+    if (!rows.length) throw new Error('the distance matrix file has no numbers');
+    const labelled = rows.every(r => r.c.length === rows.length + 1) || !isNum(rows[0].c[0]);
+    const ln = rows.map(r => r.ln);
+    const out = rows.map(r => (labelled ? r.c.slice(1) : r.c).map((c, j) => {
+      if (!isNum(c)) throw new Error('distance matrix, line ' + r.ln + ', column ' + (j + 1) + ': "' + c + '" is not a number');
+      return Number(sep === ';' ? c.replace(',', '.') : c);
+    }));
+    return { rows: out, where: i => 'line ' + ln[i] };
+  }
+
+  /* map positions for an instance that has distances but no coordinates: classical multidimensional scaling
+   * (two leading eigenvectors of the double-centred squared distances, by power iteration). Approximate by nature. */
+  function layoutFromMatrix(M, N) {
+    const B = new Float64Array(N * N), rm = new Float64Array(N); let tot = 0;
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) { const v = M[i * N + j] * M[i * N + j]; rm[i] += v / N; tot += v / (N * N); }
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) B[i * N + j] = -0.5 * (M[i * N + j] * M[i * N + j] - rm[i] - rm[j] + tot);
+    // subspace iteration with two vectors, then a 2 x 2 Rayleigh-Ritz step (exact for points that lie in a plane)
+    const R = mulberry32(12345); let u = new Float64Array(N), v = new Float64Array(N);
+    for (let i = 0; i < N; i++) { u[i] = R() - 0.5; v[i] = R() - 0.5; }
+    const mul = q => { const w = new Float64Array(N); for (let i = 0; i < N; i++) { let z = 0; const o = i * N; for (let j = 0; j < N; j++) z += B[o + j] * q[j]; w[i] = z; } return w; };
+    const dot = (p, q) => { let z = 0; for (let i = 0; i < N; i++) z += p[i] * q[i]; return z; };
+    const orth = () => {
+      let nu = Math.sqrt(dot(u, u)) || 1; for (let i = 0; i < N; i++) u[i] /= nu;
+      const d = dot(u, v); for (let i = 0; i < N; i++) v[i] -= d * u[i];
+      let nv = Math.sqrt(dot(v, v)) || 1; for (let i = 0; i < N; i++) v[i] /= nv;
+    };
+    orth();
+    for (let it = 0; it < 40; it++) { u = mul(u); v = mul(v); orth(); }
+    const Bu = mul(u), Bv = mul(v), a = dot(u, Bu), b = dot(u, Bv), c = dot(v, Bv);
+    const th = 0.5 * Math.atan2(2 * b, a - c), cs = Math.cos(th), sn = Math.sin(th);
+    const l1 = a * cs * cs + 2 * b * cs * sn + c * sn * sn, l2 = a * sn * sn - 2 * b * cs * sn + c * cs * cs;
+    const e1 = new Float64Array(N), e2 = new Float64Array(N);
+    for (let i = 0; i < N; i++) { e1[i] = cs * u[i] + sn * v[i]; e2[i] = -sn * u[i] + cs * v[i]; }
+    const axes = [{ v: e1, s: Math.sqrt(Math.max(l1, 0)) }, { v: e2, s: Math.sqrt(Math.max(l2, 0)) }];
+    const x = new Array(N), y = new Array(N);
+    for (let i = 0; i < N; i++) { x[i] = axes[0].v[i] * axes[0].s; y[i] = axes[1].v[i] * axes[1].s; }
+    if (!(axes[0].s > 0) && !(axes[1].s > 0)) for (let i = 0; i < N; i++) { x[i] = Math.cos(2 * Math.PI * i / N); y[i] = Math.sin(2 * Math.PI * i / N); }
+    return [x, y];
+  }
+
+  const EARTH_KM = 6371.0088;                                                       // mean Earth radius
+  function haversineKm(lat1, lon1, lat2, lon2) {
+    const r = Math.PI / 180, a = Math.sin((lat2 - lat1) * r / 2), b = Math.sin((lon2 - lon1) * r / 2);
+    const h = a * a + Math.cos(lat1 * r) * Math.cos(lat2 * r) * b * b;
+    return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(h)));
   }
 
   function parseCordeau(text, name) {            // types 0 (VRP) and 2 (MDVRP)
@@ -46,7 +136,7 @@
   }
 
   function parseVRPLIB(text, name) {             // single-depot .vrp (CVRPLIB)
-    const header = {}, coords = new Map(), demand = new Map(), depots = [];
+    const header = {}, coords = new Map(), demand = new Map(), depots = [], weights = [];
     let section = null;
     for (const raw of text.split(/\r?\n/)) {
       const line = raw.trim();
@@ -54,27 +144,52 @@
       if (/^[A-Z_]+\s*:/.test(line)) { const k = line.split(':')[0].trim(); header[k] = line.slice(line.indexOf(':') + 1).trim(); section = null; continue; }
       if (/SECTION$/.test(line)) { section = line; continue; }
       const p = line.split(/\s+/);
-      if (section === 'NODE_COORD_SECTION') coords.set(+p[0], [+p[1], +p[2]]);
+      if (section === 'EDGE_WEIGHT_SECTION') { for (const v of p) weights.push(Number(v)); continue; }
+      if (section === 'NODE_COORD_SECTION' || (section === 'DISPLAY_DATA_SECTION' && !coords.has(+p[0]))) coords.set(+p[0], [+p[1], +p[2]]);
       else if (section === 'DEMAND_SECTION') demand.set(+p[0], +p[1]);
       else if (section === 'DEPOT_SECTION' && +p[0] !== -1) depots.push(+p[0]);
     }
     const depot = depots.length ? depots[0] : 1;
-    const ids = [...coords.keys()].filter(i => i !== depot).sort((a, b) => a - b);
-    const x = ids.map(i => coords.get(i)[0]).concat([coords.get(depot)[0]]);
-    const y = ids.map(i => coords.get(i)[1]).concat([coords.get(depot)[1]]);
+    if (depots.length > 1) throw new Error('the file lists ' + depots.length + ' depots; .vrp files with one depot are supported (use a table or the Cordeau format for several depots)');
+    const ewt = header.EDGE_WEIGHT_TYPE || 'EUC_2D', explicit = ewt === 'EXPLICIT';
+    if (!explicit && !/^(EUC_2D|EXACT_2D|FLOAT_2D)$/.test(ewt)) throw new Error('EDGE_WEIGHT_TYPE ' + ewt + ' is not supported (supported: EUC_2D and EXPLICIT)');
+    const all = (explicit ? Array.from({ length: +header.DIMENSION || demand.size }, (_, i) => i + 1) : [...coords.keys()]).sort((a, b) => a - b);
+    if (all.length < 3) throw new Error('the file has fewer than two customers');
+    if (!all.includes(depot)) throw new Error('the depot ' + depot + ' is not among the nodes');
+    const ids = all.filter(i => i !== depot), order = ids.concat([depot]);
     const dem = ids.map(i => demand.get(i));
+    if (dem.some(q => !(q >= 0))) throw new Error('DEMAND_SECTION does not give a demand for every customer');
+    let Dgiven = null, x, y, meta = {};
+    if (explicit) {
+      const N = all.length, fmtW = header.EDGE_WEIGHT_FORMAT || 'FULL_MATRIX', full = all.map(() => new Array(N).fill(0));
+      const tri = { LOWER_ROW: [1, 0], LOWER_DIAG_ROW: [1, 1], UPPER_ROW: [0, 0], UPPER_DIAG_ROW: [0, 1], LOWER_COL: [0, 0], UPPER_COL: [1, 0], LOWER_DIAG_COL: [0, 1], UPPER_DIAG_COL: [1, 1] }[fmtW];
+      const need = fmtW === 'FULL_MATRIX' ? N * N : tri ? N * (N - 1) / 2 + (tri[1] ? N : 0) : -1;
+      if (need < 0) throw new Error('EDGE_WEIGHT_FORMAT ' + fmtW + ' is not supported (supported: FULL_MATRIX and the LOWER / UPPER triangular formats)');
+      if (weights.length !== need) throw new Error('EDGE_WEIGHT_SECTION has ' + weights.length + ' numbers; ' + fmtW + ' with ' + N + ' nodes needs ' + need);
+      let k = 0;
+      if (fmtW === 'FULL_MATRIX') for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) full[i][j] = weights[k++];
+      else if (tri[0]) for (let i = 0; i < N; i++) for (let j = 0; j < i + tri[1]; j++) { full[i][j] = weights[k]; full[j][i] = weights[k++]; }
+      else for (let i = 0; i < N; i++) for (let j = i + 1 - tri[1]; j < N; j++) { full[i][j] = weights[k]; full[j][i] = weights[k++]; }
+      const pos = order.map(id => all.indexOf(id));                          // engine order: customers, then the depot
+      Dgiven = checkMatrix(pos.map(i => pos.map(j => full[i][j])), N, i => 'node ' + order[i]);
+      meta.matrix = true;
+      if (order.every(id => coords.has(id))) { x = order.map(id => coords.get(id)[0]); y = order.map(id => coords.get(id)[1]); }
+      else { [x, y] = layoutFromMatrix(Dgiven, N); meta.layout = 'computed'; }
+    } else {
+      x = order.map(i => coords.get(i)[0]); y = order.map(i => coords.get(i)[1]);
+    }
     if (!(+header.CAPACITY > 0)) throw new Error('the file has no CAPACITY line');
     const nm = header.NAME || name || 'instance';
     /* CVRPLIB convention: EUC_2D distances are rounded to the nearest integer (sets A, B, E, F, M, P, X ...), except in the
      * sets that are always used with real distances (CMT, Golden, Li, tai).  DISTANCE is the route-duration limit and
      * SERVICE_TIME a uniform service time: travel plus service of a route must not exceed the limit (CMT6-10, 13, 14, Golden_1-8). */
     const realSet = /^(CMT|Golden|Li_|tai)/.test(nm);
-    const rounded = (header.EDGE_WEIGHT_TYPE || 'EUC_2D') === 'EUC_2D' && !realSet;
+    const rounded = ewt === 'EUC_2D' && !realSet;
     const srv = header.SERVICE_TIME !== undefined ? +header.SERVICE_TIME : 0;
     const lim = header.DISTANCE !== undefined ? +header.DISTANCE : INF;
     if (!isFinite(srv) || srv < 0 || !(lim > 0)) throw new Error('SERVICE_TIME or DISTANCE is not a valid number');
     return finish(nm, ids.length, 1, x, y, dem, new Array(ids.length).fill(srv),
-      [+header.CAPACITY], [lim], [BIG_FLEET], rounded);
+      [+header.CAPACITY], [lim], [BIG_FLEET], rounded, meta, Dgiven);
   }
 
   /* Simple table format for people who do not have a benchmark file: one row per location, with a header row.
@@ -90,8 +205,11 @@
     const cells = l => l.split(sep).map(c => c.trim().replace(/^"(.*)"$/, '$1'));
     const head = cells(lines[0]).map(h => h.toLowerCase());
     const col = (...names) => head.findIndex(h => names.includes(h));
-    const cx = col('x'), cy = col('y'), cd = col('demand', 'q', 'quantity'), ct = col('type', 'kind', 'role');
-    if (cx < 0 || cy < 0) throw new Error('the header row must name the columns "x" and "y" (found: ' + head.join(', ') + ')');
+    const cd = col('demand', 'q', 'quantity'), ct = col('type', 'kind', 'role');
+    const clat = col('lat', 'latitude'), clon = col('lon', 'lng', 'long', 'longitude');
+    const geo = clat >= 0 && clon >= 0, hasM = typeof o.matrix === 'string' && o.matrix.trim() !== '';
+    const cx = geo ? clon : col('x'), cy = geo ? clat : col('y'), noXY = cx < 0 || cy < 0;
+    if (noXY && !hasM) throw new Error('the header row must name the columns "x" and "y" (or "lat" and "lon"; found: ' + head.join(', ') + ')');
     if (cd < 0) throw new Error('the header row must have a "demand" column');
     const num = (v, what, ln) => {
       const f = Number(sep === ';' ? String(v).replace(',', '.') : v);
@@ -101,8 +219,9 @@
     const cust = [], dep = [];
     lines.slice(1).forEach((l, i) => {
       const c = cells(l), ln = i + 2;
-      const p = { x: num(c[cx], 'x', ln), y: num(c[cy], 'y', ln), q: c[cd] === undefined || c[cd] === '' ? 0 : num(c[cd], 'demand', ln) };
+      const p = { row: i, x: noXY ? 0 : num(c[cx], geo ? 'longitude' : 'x', ln), y: noXY ? 0 : num(c[cy], geo ? 'latitude' : 'y', ln), q: c[cd] === undefined || c[cd] === '' ? 0 : num(c[cd], 'demand', ln) };
       if (p.q < 0) throw new Error('line ' + ln + ': the demand cannot be negative');
+      if (geo && !noXY && (Math.abs(p.y) > 90 || Math.abs(p.x) > 180)) throw new Error('line ' + ln + ': latitude must be between -90 and 90 and longitude between -180 and 180');
       const isDepot = ct >= 0 ? /^d/i.test(c[ct] || '') : p.q === 0;
       (isDepot ? dep : cust).push(p);
     });
@@ -115,13 +234,26 @@
     const auto = !(Q > 0);
     if (auto) Q = Math.max(maxd, Math.ceil(total / Math.max(2, cust.length / 8)));   // about 8 customers per route, at least two routes
     if (maxd > Q) throw new Error('a customer demands ' + maxd + ', more than the vehicle capacity ' + Q);
-    const t = dep.length, all = cust.concat(dep);
-    return finish((name || 'table').replace(/\.(csv|tsv|txt)$/i, ''), cust.length, t, all.map(p => p.x), all.map(p => p.y), dem, new Array(cust.length).fill(0),
-      new Array(t).fill(Q), new Array(t).fill(INF), new Array(t).fill(BIG_FLEET), false, { csv: true, autoCapacity: auto });
+    const t = dep.length, all = cust.concat(dep), N = all.length, meta = { csv: true, autoCapacity: auto };
+    let x = all.map(p => p.x), y = all.map(p => p.y), Dgiven = null;
+    if (hasM) {                                                        // matrix rows and columns follow the rows of the table
+      const m = parseMatrixTable(o.matrix), full = checkMatrix(m.rows, N, m.where);
+      Dgiven = new Float64Array(N * N);
+      for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) Dgiven[i * N + j] = full[all[i].row * N + all[j].row];
+      meta.matrix = true;
+      if (noXY) { [x, y] = layoutFromMatrix(Dgiven, N); meta.layout = 'computed'; }
+    } else if (geo) {                                                  // great-circle distances in kilometres
+      Dgiven = new Float64Array(N * N);
+      for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) Dgiven[i * N + j] = Dgiven[j * N + i] = haversineKm(all[i].y, all[i].x, all[j].y, all[j].x);
+      meta.geo = true;
+    }
+    if (geo && !noXY) { const k = Math.cos(all.reduce((u, p) => u + p.y, 0) / N * Math.PI / 180); x = x.map(v => v * k); }   // map: equirectangular
+    return finish((name || 'table').replace(/\.(csv|tsv|txt)$/i, ''), cust.length, t, x, y, dem, new Array(cust.length).fill(0),
+      new Array(t).fill(Q), new Array(t).fill(INF), new Array(t).fill(BIG_FLEET), false, meta, Dgiven);
   }
 
   function parseInstance(text, name, o) {
-    if (/NODE_COORD_SECTION/.test(text)) return parseVRPLIB(text, name);
+    if (/NODE_COORD_SECTION|EDGE_WEIGHT_SECTION/.test(text)) return parseVRPLIB(text, name);
     const first = (text.replace(/^\uFEFF/, '').split(/\r?\n/).find(l => l.trim() && !l.trim().startsWith('#')) || '');
     if (/\.(csv|tsv)$/i.test(name || '') || /[a-df-zA-DF-Z]/.test(first)) return parseCSV(text, name, o);
     return parseCordeau(text, name);
@@ -689,7 +821,7 @@
     };
   }
 
-  return { mulberry32, parseInstance, parseCordeau, parseVRPLIB, parseCSV, generate, finish, solCost, rCost, violations, savings, sweep, nearestNeighbour,
+  return { mulberry32, parseInstance, parseCordeau, parseVRPLIB, parseCSV, parseMatrixTable, checkMatrix, layoutFromMatrix, haversineKm, generate, finish, solCost, rCost, violations, savings, sweep, nearestNeighbour,
     localSearch, neighbours, createSearch, createJob, copySol, OPS, PRESETS, excess, repairFleet, engines, METHODS: {},
     internals: { LS, rCost, solCost, excess, copySol, feasibleRoute, neighbours, localSearch, repairFleet, nearestDepot, mulberry32, load, now, PEN, EPS, INF, PRESETS, ruinRecreate } };
 });
