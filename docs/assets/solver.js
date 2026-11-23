@@ -87,12 +87,25 @@
   describeMethod();
   $('workers').value = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
 
-  const grp = { cvrp: 'X set (CVRP, single depot)', mdvrp: 'Cordeau (MDVRP)' };
-  Object.keys(grp).forEach(kind => {
-    const og = document.createElement('optgroup'); og.label = grp[kind];
-    catalogue.filter(e => e.kind === kind).forEach(e => {
+  /* benchmark list: grouped by set and size; the files are fetched only when an instance is loaded */
+  const groups = [
+    ['X set (Uchoa et al. 2017), 100 to 199 customers', e => e.set === 'x' && e.n < 200],
+    ['X set, 200 to 299 customers', e => e.set === 'x' && e.n >= 200 && e.n < 300],
+    ['X set, 300 to 499 customers', e => e.set === 'x' && e.n >= 300 && e.n < 500],
+    ['X set, 500 to 1000 customers (slow in the browser)', e => e.set === 'x' && e.n >= 500],
+    ['CMT (Christofides, Mingozzi and Toth 1979), 50 to 199 customers', e => e.set === 'cmt'],
+    ['Golden et al. (1998), 200 to 483 customers', e => e.set === 'golden'],
+    ['Cordeau et al. (1997), multi-depot, 48 to 360 customers', e => e.kind === 'mdvrp'],
+    ['Other', e => e.kind !== 'mdvrp' && !['x', 'cmt', 'golden'].includes(e.set)]
+  ];
+  groups.forEach(([label, pick]) => {
+    const list = catalogue.filter(pick); if (!list.length) return;
+    const og = document.createElement('optgroup'); og.label = label;
+    list.forEach(e => {
       const o = document.createElement('option'); o.value = e.name;
-      o.textContent = e.name + (e.bksStatus === 'verified' ? '  ·  BKS ' + fmt(e.bks, 0) : ''); og.appendChild(o);
+      o.textContent = e.name + (e.set === 'x' ? '' : '  ·  n = ' + e.n) + (e.limit ? '  ·  duration limit' : '') +
+        (e.bksStatus === 'verified' ? '  ·  BKS ' + fmt(e.bks, Number.isInteger(e.bks) ? 0 : 2) : '');
+      og.appendChild(o);
     });
     $('bench').appendChild(og);
   });
@@ -127,7 +140,8 @@
         I = VRP.generate(clamp(+$('n').value, 10, 400), t, +$('gseed').value, { routeSize: +$('rs').value, clustered: $('clustered').checked }); entry = null;
       }
       runs = []; viewIdx = -1; cmpMode = false; hiMethod = null; setTableMode(); showInfo(); drawAll(); $('solve').disabled = false;
-      status('Loaded ' + I.name + ' (' + I.n + ' customers, ' + I.t + (I.t === 1 ? ' depot' : ' depots') + (I.meta && I.meta.autoCapacity ? ', vehicle capacity set automatically to ' + I.Q[0] : '') + '). Press Solve.');
+      status('Loaded ' + I.name + ' (' + I.n + ' customers, ' + I.t + (I.t === 1 ? ' depot' : ' depots') + (I.meta && I.meta.autoCapacity ? ', vehicle capacity set automatically to ' + I.Q[0] : '') + '). Press Solve.' +
+        (I.n > 500 ? ' Large instance: the browser engine is slow beyond about 500 customers, so start with the quick effort.' : ''));
     } catch (e) { status('Could not load the instance: ' + e.message + (src === 'bench' ? ' (examples need the page to be opened from the website, not from a saved file)' : src === 'file' ? '. Check the file against the template.' : '')); }
   }
   $('load').addEventListener('click', loadInstance);

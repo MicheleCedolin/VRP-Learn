@@ -12,13 +12,17 @@ test('all examples are bundled and parse', () => {
   const sb = { window: {} };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'docs', 'assets', 'instances.js'), 'utf8'), sb);
   const list = sb.window.VRP_INSTANCES;
-  assert.ok(list.length >= 36);
+  assert.strictEqual(list.length, 167);
+  const sets = {}; list.forEach(e => { sets[e.set] = (sets[e.set] || 0) + 1; });
+  assert.deepStrictEqual(sets, { x: 100, cmt: 14, golden: 20, cordeau: 33 });
   for (const e of list) {
     assert.ok(!/^https?:/.test(e.url), e.name + ' is not local: ' + e.url);
     assert.ok(/^https:\/\//.test(e.source), e.name + ' has no source URL');
     const I = V.parseInstance(fs.readFileSync(path.join(root, 'docs', e.url), 'utf8'), e.name);
     assert.ok(I.n >= 40 && I.t >= 1 && I.dem.length === I.n && I.dem.every(q => q > 0), e.name);
     assert.strictEqual(I.t > 1, e.kind === 'mdvrp', e.name + ' kind');
+    assert.strictEqual(I.n, e.n, e.name + ' size in the list'); assert.strictEqual(isFinite(I.Dmax[0]), e.limit, e.name + ' limit flag');
+    if (e.kind === 'cvrp') assert.ok(e.bks > 0 && e.bksStatus === 'verified', e.name + ' best-known value');
   }
 });
 
@@ -77,5 +81,36 @@ test('CSV instances are solved feasibly by different methods', () => {
 test('Cordeau and CVRPLIB files are still recognised', () => {
   assert.strictEqual(V.parseInstance(fs.readFileSync(path.join(root, 'docs/data/mdvrp/p01'), 'utf8'), 'p01').t, 4);
   assert.strictEqual(V.parseInstance(fs.readFileSync(path.join(root, 'docs/data/cvrp/X-n101-k25.vrp'), 'utf8'), 'x').n, 100);
+});
+
+test('CVRPLIB reader: duration limit, service time and rounding rule', () => {
+  const rd = f => V.parseInstance(fs.readFileSync(path.join(root, 'docs/data/cvrp', f + '.vrp'), 'utf8'), f);
+  let I = rd('CMT6');
+  assert.strictEqual(I.Dmax[0], 200); assert.ok(I.srv.every(s => s === 10)); assert.strictEqual(I.rounded, false);
+  I = rd('CMT1'); assert.strictEqual(I.Dmax[0], Infinity); assert.ok(I.srv.every(s => s === 0)); assert.strictEqual(I.rounded, false);
+  I = rd('Golden_1'); assert.strictEqual(I.Dmax[0], 650); assert.strictEqual(I.rounded, false);
+  I = rd('X-n101-k25'); assert.strictEqual(I.rounded, true); assert.strictEqual(I.Dmax[0], Infinity);
+  assert.throws(() => V.parseInstance('NAME : a\nNODE_COORD_SECTION\n1 0 0\n2 1 1\nDEMAND_SECTION\n1 0\n2 1\nEOF\n', 'a.vrp'), /no CAPACITY/);
+});
+
+test('CVRPLIB reader agrees with the reference C++ implementation (cost and feasibility of fixed solutions)', () => {
+  const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'reader_parity.json'), 'utf8')).solutions;
+  assert.strictEqual(Object.keys(fx).length, 6);
+  for (const [name, f] of Object.entries(fx)) {
+    const I = V.parseInstance(fs.readFileSync(path.join(root, 'docs/data/cvrp', name + '.vrp'), 'utf8'), name);
+    const s = { routes: f.routes.map(r => ({ d: 0, nodes: r.map(c => c - 1) })) };
+    assert.deepStrictEqual(V.violations(I, s), [], name);
+    assert.ok(Math.abs(V.solCost(I, s) - f.cost) < 1e-5, name + ': ' + V.solCost(I, s) + ' vs ' + f.cost);
+  }
+});
+
+test('an instance with a duration limit is solved within the limit', () => {
+  const I = V.parseInstance(fs.readFileSync(path.join(root, 'docs/data/cvrp/CMT6.vrp'), 'utf8'), 'CMT6');
+  for (const mode of ['sisr', 'alns', 'tabu', 'ga']) {
+    const S = V.createSearch(I, V.savings(I), { mode, iters: mode === 'ga' ? 60 : 3000, seed: 1, ops: V.PRESETS.full, k: 12 });
+    S.step(1e9);
+    assert.deepStrictEqual(V.violations(I, S.best), [], mode);
+    assert.ok(S.bestCost >= 555.43 - 1e-6 && S.bestCost < 1.1 * 555.43, mode + ' cost ' + S.bestCost);
+  }
 });
 console.log(passed + ' passed');

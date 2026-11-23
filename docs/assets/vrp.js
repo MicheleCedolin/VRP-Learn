@@ -63,9 +63,18 @@
     const x = ids.map(i => coords.get(i)[0]).concat([coords.get(depot)[0]]);
     const y = ids.map(i => coords.get(i)[1]).concat([coords.get(depot)[1]]);
     const dem = ids.map(i => demand.get(i));
-    const rounded = (header.EDGE_WEIGHT_TYPE || 'EUC_2D') === 'EUC_2D';
-    return finish(header.NAME || name || 'instance', ids.length, 1, x, y, dem, new Array(ids.length).fill(0),
-      [+header.CAPACITY], [INF], [BIG_FLEET], rounded);
+    if (!(+header.CAPACITY > 0)) throw new Error('the file has no CAPACITY line');
+    const nm = header.NAME || name || 'instance';
+    /* CVRPLIB convention: EUC_2D distances are rounded to the nearest integer (sets A, B, E, F, M, P, X ...), except in the
+     * sets that are always used with real distances (CMT, Golden, Li, tai).  DISTANCE is the route-duration limit and
+     * SERVICE_TIME a uniform service time: travel plus service of a route must not exceed the limit (CMT6-10, 13, 14, Golden_1-8). */
+    const realSet = /^(CMT|Golden|Li_|tai)/.test(nm);
+    const rounded = (header.EDGE_WEIGHT_TYPE || 'EUC_2D') === 'EUC_2D' && !realSet;
+    const srv = header.SERVICE_TIME !== undefined ? +header.SERVICE_TIME : 0;
+    const lim = header.DISTANCE !== undefined ? +header.DISTANCE : INF;
+    if (!isFinite(srv) || srv < 0 || !(lim > 0)) throw new Error('SERVICE_TIME or DISTANCE is not a valid number');
+    return finish(nm, ids.length, 1, x, y, dem, new Array(ids.length).fill(srv),
+      [+header.CAPACITY], [lim], [BIG_FLEET], rounded);
   }
 
   /* Simple table format for people who do not have a benchmark file: one row per location, with a header row.
