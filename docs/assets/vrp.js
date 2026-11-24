@@ -873,8 +873,29 @@
   }
   function setCustom(code) { engines.custom = compileCustom(code); }
 
+  /* Common start of a run. A construction can exceed the fleet of a depot when the fleet is tight (Cordeau pr instances), and
+   * several methods never leave such a start. As in the reference C++ driver, the start is then repaired once, deterministically,
+   * by short penalised ruin-and-recreate runs with a fixed seed, and every method starts from the repaired solution.
+   * A feasible construction is returned unchanged (the usual case). The repair is not part of the time budget. */
+  const startCache = new Map();
+  function commonStart(I, construct) {
+    const init = construct === 'sweep' ? sweep(I) : construct === 'nn' ? nearestNeighbour(I) : savings(I);
+    if (!violations(I, init).length) return { sol: init, repaired: false };
+    let h = 0; for (let i = 0; i < I.N; i++) h += I.D[i] * (i + 1);                           // same name, another file: another key
+    const key = [I.name, I.n, I.t, construct || 'savings', I.fleet.join('.'), I.Q.join('.'), I.Dmax.join('.'), h].join('|');
+    if (startCache.has(key)) return { sol: copySol(startCache.get(key)), repaired: true };
+    for (const iters of [20000, 80000, 320000]) {
+      const S = createSearch(I, init, { mode: 'sisr', iters, seed: 987654321, ops: PRESETS.full, k: 12 }); S.step(Infinity);
+      if (!violations(I, S.best).length) {
+        if (startCache.size > 8) startCache.clear();
+        startCache.set(key, copySol(S.best)); return { sol: copySol(S.best), repaired: true };
+      }
+    }
+    return { sol: init, repaired: false };
+  }
+
   function createJob(I, cfg) {
-    const init = cfg.construct === 'sweep' ? sweep(I) : cfg.construct === 'nn' ? nearestNeighbour(I) : savings(I);
+    const start = commonStart(I, cfg.construct), init = start.sol;
     const initCost = solCost(I, init) + PEN * excess(I, init);
     const S = createSearch(I, init, { mode: cfg.mode, iters: cfg.iters, seed: cfg.seed, ops: cfg.ops, k: cfg.k, params: cfg.params, chunk: cfg.mode === 'custom' ? 1 : undefined });
     let sent = 0, sentBest = Infinity;
@@ -889,12 +910,12 @@
       result(stopped) {
         const best = copySol(S.best), v = violations(I, best);
         return { sol: best, cost: solCost(I, best), violations: v, iter: S.iter, total: S.total, seconds: S.seconds, initCost,
-          stats: Object.assign({}, S.stats), hist: S.hist.slice(), stopped: !!stopped };
+          stats: Object.assign({}, S.stats), hist: S.hist.slice(), stopped: !!stopped, startRepaired: start.repaired };
       },
     };
   }
 
   return { mulberry32, parseInstance, parseCordeau, parseVRPLIB, parseCSV, parseMatrixTable, checkMatrix, layoutFromMatrix, haversineKm, generate, finish, solCost, rCost, violations, savings, sweep, nearestNeighbour,
-    localSearch, neighbours, createSearch, createJob, compileCustom, setCustom, copySol, OPS, PRESETS, excess, repairFleet, engines, METHODS: {},
+    localSearch, neighbours, createSearch, createJob, commonStart, compileCustom, setCustom, copySol, OPS, PRESETS, excess, repairFleet, engines, METHODS: {},
     internals: { LS, rCost, solCost, excess, copySol, feasibleRoute, neighbours, localSearch, repairFleet, nearestDepot, mulberry32, load, now, PEN, EPS, INF, PRESETS, ruinRecreate } };
 });

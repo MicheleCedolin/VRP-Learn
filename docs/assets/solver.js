@@ -197,6 +197,7 @@
     const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
     const w = new Worker(url); setTimeout(() => URL.revokeObjectURL(url), 10000); return w;
   }
+  let startRepaired = false;                        // set when a run reports that the constructed start had to be repaired
   const CUSTOM_SILENCE_MS = 15000;                  // a custom method that does not answer for this long is stopped
   function calibrate(id, secs, base) {
     const custom = id === 'custom';
@@ -256,6 +257,7 @@
     $('prog').hidden = false; $('prog').max = total; $('prog').value = 0;
     const jobs = runs.slice().sort((a, b) => a.k - b.k || a.idx - b.idx).map(r => ({ id: r.idx, cfg: Object.assign({}, base, { mode: r.method, iters: r.iters, seed: r.seed }, r.method === 'custom' ? { code } : {}) }));   // run 1 of every method first, so a stopped session still compares all methods
     const conc = clamp(Math.round(+$('workers').value) || 1, 1, Math.min(16, total));
+    startRepaired = false;
     runner = startRunner(I, jobs, conc, !!code, {
       onStart: id => { runs[id].status = 'running'; schedule(); },
       onProgress: (id, m) => {
@@ -263,6 +265,7 @@
         if (m.sol) r.sol = m.sol; schedule();
       },
       onDone: (id, m) => {
+        if (m.startRepaired) startRepaired = true;
         const r = runs[id]; r.status = m.stopped ? 'stopped' : 'done'; r.sol = m.sol; r.cost = m.cost; r.violations = m.violations; r.iter = m.iter; r.total = m.total;
         if (r.method === 'custom') { r.cost = VRP.solCost(I, m.sol); r.violations = VRP.violations(I, m.sol); }      // custom results are checked again in the page
         r.seconds = m.seconds; r.hist = m.hist; r.stats = m.stats; r.initCost = m.initCost; r.toBest = m.hist[m.hist.length - 1][2] / 1000; checkAllDone(); schedule();
@@ -281,7 +284,8 @@
     const f = statRuns(); const el = (performance.now() - tStart) / 1000;
     const cut = runs.some(r => r.status === 'stopped' || r.status === 'skipped');
     const what = f.length + (f.length === 1 ? ' run' : ' runs') + (cmpMode ? ' of ' + new Set(f.map(r => r.method)).size + ' methods' : '');
-    status(f.length ? (cut ? 'Stopped after ' + fmt(el, 1) + ' s; ' + what + ' reported (stopped runs are partial and left out of the mean ± sd when complete runs exist).' : 'Done: ' + what + ' in ' + fmt(el, 1) + ' s wall time.' + (cmpMode ? ' Ranking and charts below.' : '')) : 'No run finished.');
+    status(f.length ? (cut ? 'Stopped after ' + fmt(el, 1) + ' s; ' + what + ' reported (stopped runs are partial and left out of the mean ± sd when complete runs exist).' : 'Done: ' + what + ' in ' + fmt(el, 1) + ' s wall time.' + (cmpMode ? ' Ranking and charts below.' : '') +
+      (startRepaired ? ' The constructed start used more vehicles than a depot has, so all runs started from a repaired, feasible solution.' : '')) : 'No run finished.');
     $('dlSol').disabled = !f.length; $('dlCsv').disabled = !f.length; $('dlMap').disabled = !f.length; $('dlConv').disabled = !f.length;
   }
   function stopSolve(silent) {

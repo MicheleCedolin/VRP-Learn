@@ -191,4 +191,24 @@ test('latitude / longitude tables use great-circle distances in kilometres', () 
   const J = V.parseInstance('Latitude;Longitude;Demand\n45,4642;9,19;0\n45,0703;7,6869;4\n44,4949;11,3426;3\n', 'it2.csv');
   assert.ok(Math.abs(J.D[0 * 3 + 2] - I.D[0 * 4 + 3]) < 1e-9, 'decimal comma');
 });
+
+test('tight fleets: the start is repaired, and every method ends feasible on all pr instances', () => {
+  const need = [];
+  for (let k = 1; k <= 10; k++) {
+    const f = 'pr' + String(k).padStart(2, '0'), I = V.parseInstance(fs.readFileSync(path.join(root, 'docs/data/mdvrp', f), 'utf8'), f);
+    const raw = V.violations(I, V.savings(I)).length, a = V.commonStart(I, 'savings'), b = V.commonStart(I, 'savings');
+    assert.deepStrictEqual(V.violations(I, a.sol), [], f + ' start'); assert.strictEqual(a.repaired, raw > 0, f);
+    assert.strictEqual(V.solCost(I, a.sol), V.solCost(I, b.sol), f + ' same start for every run');
+    if (!raw) assert.ok(Math.abs(V.solCost(I, a.sol) - V.solCost(I, V.savings(I))) < 1e-9, f + ' feasible start unchanged');
+    else need.push(f);
+    for (const m of Object.keys(V.METHODS)) {
+      const pop = ['ga', 'aco', 'grasppr', 'scatter', 'brkga', 'pso', 'de', 'grasp', 'msls'].includes(m);
+      const job = V.createJob(I, { mode: m, iters: pop ? 6 : 150, seed: 1, construct: 'savings', ops: V.PRESETS.full, k: 12 });
+      let p; do { p = job.poll(1000); } while (!p.done);
+      const r = job.result(false);
+      assert.deepStrictEqual(r.violations, [], f + ' ' + m); assert.strictEqual(r.startRepaired, raw > 0);
+    }
+  }
+  assert.deepStrictEqual(need, ['pr05', 'pr10']);
+});
 console.log(passed + ' passed');
