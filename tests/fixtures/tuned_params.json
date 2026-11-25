@@ -1,0 +1,86 @@
+{
+ "note": "Final irace configurations of the seven compact methods (tuning/results/<method>/best_config.txt of the reference implementation, commit 164e707), and results of the engine with the literature parameters before the tuned values became the defaults (savings start, seed 7, full operators, k 12; 2500 iterations, 25 for population and multi-start methods).",
+ "tuned": {
+  "sisr": {
+   "cbar": 17.026,
+   "lmax": 17,
+   "alpha": 0.0024,
+   "blink": 0.0249,
+   "t0": 1.2649,
+   "tf": 0.0103
+  },
+  "ta": {
+   "th0": 0.5893
+  },
+  "rtr": {
+   "dev0": 0.0106
+  },
+  "grasp": {
+   "alpha": 0.056
+  },
+  "lns": {
+   "qlo": 0.1415,
+   "qhi": 0.2506
+  },
+  "aco": {
+   "alpha": 3.5482,
+   "beta": 6.0817,
+   "rho": 0.2683,
+   "ants": 11
+  },
+  "pso": {
+   "w0": 0.7427,
+   "w1": 0.3096,
+   "c1": 1.2961,
+   "c2": 2.101,
+   "vmax": 0.197,
+   "swarm": 42
+  }
+ },
+ "literatureResults": {
+  "CMT1": {
+   "sisr": 527.6748210713286,
+   "ils": 524.6111466425074,
+   "sa": 577.7106479368102,
+   "ta": 564.1041371914883,
+   "rtr": 572.8532107948821,
+   "tabu": 574.2871583336216,
+   "vns": 527.6748210713286,
+   "grasp": 539.2148749178874,
+   "msls": 530.7816619399335,
+   "alns": 538.7862207012906,
+   "lns": 533.6652367911393,
+   "ig": 553.1282684006059,
+   "ga": 529.7772890069426,
+   "aco": 538.8555860704114,
+   "grasppr": 540.8561352689527,
+   "scatter": 531.7994563118746,
+   "brkga": 558.4311737455741,
+   "pso": 550.3472442129208,
+   "de": 558.4311737455741,
+   "rkrs": 584.6372084179404
+  },
+  "p01": {
+   "sisr": 601.3666174298488,
+   "ils": 576.8656874818462,
+   "sa": 619.2773010955665,
+   "ta": 611.7434161229696,
+   "rtr": 647.5401782562524,
+   "tabu": 611.6493387193364,
+   "vns": 576.8656874818463,
+   "grasp": 598.7797337885596,
+   "msls": 596.3679872927216,
+   "alns": 597.7493250407747,
+   "lns": 599.2087343039314,
+   "ig": 600.1429278420553,
+   "ga": 604.3789463880019,
+   "aco": 584.9998993876105,
+   "grasppr": 586.3020736894429,
+   "scatter": 602.9401907396741,
+   "brkga": 612.4429608273041,
+   "pso": 621.0590774398985,
+   "de": 612.4429608273041,
+   "rkrs": 647.5401782562524
+  }
+ }
+}

@@ -704,14 +704,14 @@
     const nb = neighbours(I, cfg.k || 12);
     const adj = []; for (let u = 0; u < I.n; u++) { const a = []; for (let v = 0; v < I.n; v++) a.push(v); a.sort((p, q) => I.D[u * I.N + p] - I.D[u * I.N + q]); adj.push(a); }
     const ops = new Set(cfg.ops || PRESETS.standard), iters = cfg.iters || 20000;
-    const p = mode === 'sisr' ? { cbar: 10, lmax: 10, alpha: 0.01, blink: 0.01 } : { cbar: 6, lmax: 6, alpha: 0.01, blink: 0.01 };
+    const p = mode === 'sisr' ? Object.assign({}, LITERATURE_PARAMS.sisr, paramsOf(cfg)) : { cbar: 6, lmax: 6, alpha: 0.01, blink: 0.01 };   // ILS keeps its own constants
     const obj = s => solCost(I, s) + PEN * excess(I, s);
     let cur = copySol(init);
     const stats = {};
     if (mode === 'ils') { const r = localSearch(I, cur, { ops, nb, rand }); cur = r.sol; for (const k in r.stats) stats[k] = (stats[k] || 0) + r.stats[k]; }
     let curO = obj(cur), best = copySol(cur), bestO = curO;
     const avg = solCost(I, cur) / (I.n + cur.routes.length);
-    const T0 = (mode === 'sisr' ? 0.45 : 0.05) * avg, Tf = (mode === 'sisr' ? 0.0045 : 0.001) * avg;
+    const T0 = (mode === 'sisr' ? p.t0 : 0.05) * avg, Tf = (mode === 'sisr' ? p.tf : 0.001) * avg;
     const cool = Math.pow(Tf / T0, 1 / iters);
     // hist entries: [iteration, best cost so far, active compute time in ms].  Time counts only the time spent inside
     // step()/stepFor(), so it is not inflated by the page being idle between slices.
@@ -759,6 +759,29 @@
    * env.offer(sol[, objective]).  The wrapper provides the same resumable interface as createSearch
    * (iter, total, best, hist [iteration, best cost, active ms], seconds, step, stepFor), so Workers, the Solver page and
    * the tests treat all methods alike.  The search starts from the incumbent init, so best-so-far never exceeds it. */
+  /* ---- parameters ---------------------------------------------------------------------------------------------------
+   * LITERATURE_PARAMS: the values of the cited papers (the defaults written in the code of each method).
+   * TUNED_PARAMS: values found with irace (Lopez-Ibanez et al. 2016) for the seven methods whose compact variant was tuned
+   * in the accompanying study, on the reference C++ implementation with 28 training instances. A run uses the tuned values
+   * unless cfg.defaults === 'literature'; cfg.params overrides single values in both cases. The other methods have no tuned
+   * values here (the study tuned upgraded variants of them, which are not part of this engine). */
+  const LITERATURE_PARAMS = {
+    sisr: { cbar: 10, lmax: 10, alpha: 0.01, blink: 0.01, t0: 0.45, tf: 0.0045 },
+    ta: { th0: 0.05 }, rtr: { dev0: 0.02 }, grasp: { alpha: 0.2 }, lns: { qlo: 0.05, qhi: 0.2 },
+    aco: { alpha: 1, beta: 3, rho: 0.1, ants: 10 },
+    pso: { w0: 0.9, w1: 0.4, c1: 1.5, c2: 1.5, vmax: 0.5, swarm: 20 }
+  };
+  const TUNED_PARAMS = {
+    sisr: { cbar: 17.026, lmax: 17, alpha: 0.0024, blink: 0.0249, t0: 1.2649, tf: 0.0103 },
+    ta: { th0: 0.5893 }, rtr: { dev0: 0.0106 }, grasp: { alpha: 0.056 }, lns: { qlo: 0.1415, qhi: 0.2506 },
+    aco: { alpha: 3.5482, beta: 6.0817, rho: 0.2683, ants: 11 },
+    pso: { w0: 0.7427, w1: 0.3096, c1: 1.2961, c2: 2.101, vmax: 0.197, swarm: 42 }
+  };
+  function paramsOf(cfg) {
+    const base = (cfg.defaults === 'literature' ? LITERATURE_PARAMS : TUNED_PARAMS)[cfg.mode || 'sisr'];
+    return Object.assign({}, base, cfg.params);
+  }
+
   const engines = {};
   function createEngineSearch(I, init, cfg, factory) {
     const iters = cfg.iters || 20000, rand = mulberry32(cfg.seed || 1), stats = {};
@@ -766,7 +789,7 @@
     let it = 0, active = 0, t0 = now(), best = copySol(init), bestO = obj(best);
     const hist = [[0, solCost(I, best), 0]];
     const env = {
-      I, rand, cfg, iters, obj, stats, params: cfg.params || {},
+      I, rand, cfg, iters, obj, stats, params: paramsOf(cfg),
       get it() { return it; }, get bestO() { return bestO; }, get bestSol() { return best; },
       offer(sol, o) {
         if (o === undefined) o = obj(sol);
@@ -897,7 +920,7 @@
   function createJob(I, cfg) {
     const start = commonStart(I, cfg.construct), init = start.sol;
     const initCost = solCost(I, init) + PEN * excess(I, init);
-    const S = createSearch(I, init, { mode: cfg.mode, iters: cfg.iters, seed: cfg.seed, ops: cfg.ops, k: cfg.k, params: cfg.params, chunk: cfg.mode === 'custom' ? 1 : undefined });
+    const S = createSearch(I, init, { mode: cfg.mode, iters: cfg.iters, seed: cfg.seed, ops: cfg.ops, k: cfg.k, params: cfg.params, defaults: cfg.defaults, chunk: cfg.mode === 'custom' ? 1 : undefined });
     let sent = 0, sentBest = Infinity;
     const progress = done => {
       const m = { iter: S.iter, total: S.total, seconds: S.seconds, cost: S.bestCost, initCost, hist: S.hist.slice(sent), done };
@@ -916,6 +939,6 @@
   }
 
   return { mulberry32, parseInstance, parseCordeau, parseVRPLIB, parseCSV, parseMatrixTable, checkMatrix, layoutFromMatrix, haversineKm, generate, finish, solCost, rCost, violations, savings, sweep, nearestNeighbour,
-    localSearch, neighbours, createSearch, createJob, commonStart, compileCustom, setCustom, copySol, OPS, PRESETS, excess, repairFleet, engines, METHODS: {},
+    localSearch, neighbours, createSearch, createJob, commonStart, LITERATURE_PARAMS, TUNED_PARAMS, compileCustom, setCustom, copySol, OPS, PRESETS, excess, repairFleet, engines, METHODS: {},
     internals: { LS, rCost, solCost, excess, copySol, feasibleRoute, neighbours, localSearch, repairFleet, nearestDepot, mulberry32, load, now, PEN, EPS, INF, PRESETS, ruinRecreate } };
 });

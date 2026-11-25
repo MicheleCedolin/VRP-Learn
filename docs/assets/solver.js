@@ -60,7 +60,7 @@
   function describeMethod() {
     const m = VRP.METHODS[$('method').value];
     const refs = m.refs.map(k => '<a href="learn.html#ref-' + k + '">' + (REF[k] || k) + '</a>').join('; ');
-    $('methodDesc').innerHTML = m.desc + ' <i>One iteration = ' + m.unit + '.</i> Defaults: ' + m.params + '. ' + (refs ? '<span class="refs">' + refs + '</span>' : $('method').value === 'custom' ? '' : '<span class="refs">Control baseline, not a published method.</span>');
+    $('methodDesc').innerHTML = m.desc + ' <i>One iteration = ' + m.unit + '.</i> Parameters: ' + m.params + '. ' + (refs ? '<span class="refs">' + refs + '</span>' : $('method').value === 'custom' ? '' : '<span class="refs">Control baseline, not a published method.</span>');
   }
   function updateEst() {
     const cmp = $('compare').checked, ms = cmp ? cmpSelected().length : 1, R = clamp(Math.round(+$('runs').value) || 1, 1, 50), W = clamp(Math.round(+$('workers').value) || 1, 1, 16), secs = EFFORT_S[$('effort').value];

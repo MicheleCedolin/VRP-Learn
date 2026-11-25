@@ -11,7 +11,8 @@
  *   population   ga  aco  grasppr  scatter
  *   random-key   brkga  pso  de  rkrs               (keys -> priorities -> giant tours -> optimal split)
  *   (sisr and ils live in vrp.js)
- * All are teaching-grade, written from the cited literature; they are not tuned to reproduce published results.
+ * All are teaching-grade, written from the cited literature. Seven of them (sisr, ta, rtr, grasp, lns, aco, pso) run with
+ * parameters tuned with irace (VRP.TUNED_PARAMS in vrp.js); the others use the values of the cited papers.
  * Operators work on the same solution model as the local search of vrp.js (any depot may serve any customer).
  */
 (function (root, factory) {
@@ -694,24 +695,24 @@
   /* ================================================================== catalogue (used by the Solver and checked by the tests) */
   const G = { A: 'Trajectory methods', B: 'Multi-start', C: 'Destroy & repair', D: 'Population & elite pool', E: 'Random-key search' };
   const META = [
-    ['sisr', 'C', 'Ruin & recreate + SA (SISR-style)', 'one ruin-and-recreate step', 'Removes adjacent strings of customers from a few routes (Christiaens & Vanden Berghe), reinserts them with a blink-greedy rule and accepts by simulated annealing.', 'cooling 100 -> 1; string length and count as in the paper', ['christiaens2020']],
+    ['sisr', 'C', 'Ruin & recreate + SA (SISR-style)', 'one ruin-and-recreate step', 'Removes adjacent strings of customers from a few routes (Christiaens & Vanden Berghe), reinserts them with a blink-greedy rule and accepts by simulated annealing.', 'mean removed customers 17.0, string length up to 17, split depth 0.0024, blink rate 0.025, temperature 1.26 -> 0.0103 (x mean edge) (tuned with irace)', ['christiaens2020']],
     ['ils', 'A', 'Iterated local search', 'one perturbation + local search', 'Perturbs the incumbent by ruin & recreate, repairs it with the local-search operators selected below and keeps it if it is not worse.', 'operators, granular size k', ['lourenco2003']],
     ['sa', 'A', 'Simulated annealing', 'one random move', 'Random relocate / Or-opt / swap / 2-opt / 2-opt* / new-route moves; a worse move is accepted with probability exp(-delta/T), T cooled geometrically in 3 cycles with reheating.', 't0 = 0.1, tf = 0.002 (x mean edge), 3 cycles, reheat 0.5', ['kirkpatrick1983', 'osman1993']],
-    ['ta', 'A', 'Threshold accepting', 'one random move', 'Accepts every random move whose cost increase stays below a threshold that shrinks linearly to zero: deterministic, no random acceptance draw.', 'initial threshold 0.05 x mean edge', ['dueck1990', 'tarantilis2002']],
-    ['rtr', 'A', 'Record-to-record travel', 'one random move', 'Accepts a move if the new cost stays within a band of the best cost found so far (the record); the band shrinks linearly from 2 % to 0.', 'initial deviation 2 %', ['dueck1993', 'li2005']],
+    ['ta', 'A', 'Threshold accepting', 'one random move', 'Accepts every random move whose cost increase stays below a threshold that shrinks linearly to zero: deterministic, no random acceptance draw.', 'initial threshold 0.589 x mean edge (tuned with irace)', ['dueck1990', 'tarantilis2002']],
+    ['rtr', 'A', 'Record-to-record travel', 'one random move', 'Accepts a move if the new cost stays within a band of the best cost found so far (the record); the band shrinks linearly from 2 % to 0.', 'initial deviation 1.06 % (tuned with irace)', ['dueck1993', 'li2005']],
     ['tabu', 'A', 'Tabu search', 'one best-of-30 random move', 'Samples 30 random moves, applies the best one that is not tabu (or that beats the best solution); a customer that left a route may not return to it for 8-16 iterations.', 'candidates 30, tenure 8 + U(0..8)', ['glover1989', 'gendreau1994']],
     ['vns', 'A', 'Variable neighbourhood search', 'one shake + local search', 'Shakes the incumbent with 2k random moves (k = 1..5), repairs it with the local search, moves if better and otherwise increases k.', 'kmax = 5', ['mladenovic1997', 'kytojoki2007']],
-    ['grasp', 'B', 'GRASP', 'one construction + local search', 'Randomised nearest-neighbour construction (restricted candidate list of the best 20 %) followed by the local search, repeated.', 'alpha = 0.2', ['feo1995', 'prins2006']],
+    ['grasp', 'B', 'GRASP', 'one construction + local search', 'Randomised nearest-neighbour construction (restricted candidate list of the best 20 %) followed by the local search, repeated.', 'alpha = 0.056 (tuned with irace)', ['feo1995', 'prins2006']],
     ['msls', 'B', 'Multi-start local search', 'one random decode + local search', 'Local search from solutions decoded from random priority keys (optimal split), repeated.', 'none', ['marti2013', 'prins2004']],
     ['alns', 'C', 'Adaptive large neighbourhood search', 'one destroy + repair', 'Random, worst and related (Shaw) removal with greedy and regret-2 insertion, chosen by roulette wheel; weights adapted every 100 iterations; annealing acceptance.', 'removal 5-20 % of n, segment 100, reaction 0.1, scores 33/9/3', ['ropke2006', 'pisinger2007']],
-    ['lns', 'C', 'Large neighbourhood search', 'one destroy + repair', 'The same destroy and repair operators as ALNS chosen uniformly at random; only non-worsening solutions are accepted.', 'removal 5-20 % of n', ['shaw1998']],
+    ['lns', 'C', 'Large neighbourhood search', 'one destroy + repair', 'The same destroy and repair operators as ALNS chosen uniformly at random; only non-worsening solutions are accepted.', 'removal 14-25 % of n (tuned with irace)', ['shaw1998']],
     ['ig', 'C', 'Iterated greedy (LNS variant)', 'one destroy + repair', 'A fixed large-neighbourhood search in the iterated-greedy style: removes 10 % random customers, reinserts them greedily (cheapest feasible insertion) and accepts within a small acceptance band.', 'removal 10 %, band 0.2 %', ['shaw1998', 'ruiz2007']],
     ['ga', 'D', 'Memetic genetic algorithm', 'one child', 'Giant-tour chromosomes (+ depot genes), binary tournament, order crossover, optimal split decoding, local search on every child; steady-state replacement of the worst.', 'population 20, mutation 10 %', ['prins2004', 'vidal2012']],
-    ['aco', 'D', 'Ant colony (MAX-MIN)', 'one ant + local search', 'Ants build routes by probabilistic nearest-neighbour steps weighted by pheromone and 1/distance, then the local search; the colony best (every 5th cycle the global best) reinforces its arcs.', '10 ants, alpha 1, beta 3, rho 0.1', ['bullnheimer1999', 'stutzle2000']],
+    ['aco', 'D', 'Ant colony (MAX-MIN)', 'one ant + local search', 'Ants build routes by probabilistic nearest-neighbour steps weighted by pheromone and 1/distance, then the local search; the colony best (every 5th cycle the global best) reinforces its arcs.', '11 ants, alpha 3.55, beta 6.08, rho 0.268 (tuned with irace)', ['bullnheimer1999', 'stutzle2000']],
     ['grasppr', 'D', 'GRASP + path relinking', 'one GRASP + one relinking', 'Each GRASP local optimum is relinked towards a random elite solution on giant tours; the best intermediate tour is improved and offered to the elite pool.', 'elite 8, relink at 25/50/75 %', ['resende2005', 'prins2006', 'sorensen2013']],
     ['scatter', 'D', 'Scatter search', 'one combination', 'Diversified pool -> reference set (6 best + 4 most distant) -> every pair combined by path relinking and improved -> reference set updated; diverse members regenerated when it stalls.', 'b1 = 6, b2 = 4, pool 16', ['glover1998', 'marti2006', 'russell2006']],
     ['brkga', 'E', 'Biased random-key GA', 'one decoded individual', 'Key vectors decoded to routes; elite 20 %, mutants 15 %, each child gene inherited from an elite parent with probability 0.7.', 'population 30', ['goncalves2011', 'bean1994']],
-    ['pso', 'E', 'Particle swarm (random keys)', 'one particle move', 'Particles move in key space with inertia 0.9 -> 0.4, c1 = c2 = 1.5, velocity clamp 0.5, positions wrapped modulo 1.', 'swarm 20', ['kennedy1995', 'ai2009']],
+    ['pso', 'E', 'Particle swarm (random keys)', 'one particle move', 'Particles move in key space with inertia 0.9 -> 0.4, c1 = c2 = 1.5, velocity clamp 0.5, positions wrapped modulo 1.', 'swarm 42, inertia 0.743 -> 0.310, c1 1.30, c2 2.10, vmax 0.197 (tuned with irace)', ['kennedy1995', 'ai2009']],
     ['de', 'E', 'Differential evolution (rand/1/bin)', 'one trial vector', 'Mutant = x1 + F (x2 - x3), binomial crossover, greedy one-to-one replacement.', 'NP 20, F 0.5, CR 0.9', ['storn1997', 'teoh2015']],
     ['rkrs', 'E', 'Random-key random search (control)', 'one random decode', 'Draws a fresh random key vector each iteration and keeps the best decode: the control baseline of the random-key family, not a published method.', 'none', []],
   ];
@@ -726,17 +727,18 @@
     prins2004: 'Prins (2004)', ropke2006: 'Ropke & Pisinger (2006)', pisinger2007: 'Pisinger & Ropke (2007)', shaw1998: 'Shaw (1998)', ruiz2007: 'Ruiz & Stützle (2007)',
     vidal2012: 'Vidal et al. (2012)', bullnheimer1999: 'Bullnheimer, Hartl & Strauss (1999)', stutzle2000: 'Stützle & Hoos (2000)', resende2005: 'Resende & Ribeiro (2005)',
     glover1998: 'Glover (1998)', marti2006: 'Martí, Laguna & Glover (2006)', goncalves2011: 'Gonçalves & Resende (2011)', bean1994: 'Bean (1994)',
-    kennedy1995: 'Kennedy & Eberhart (1995)', ai2009: 'Ai & Kachitvichyanukul (2009)', storn1997: 'Storn & Price (1997)', tarantilis2002: 'Tarantilis, Kiranoudis & Vassiliadis (2002)', li2005: 'Li, Golden & Wasil (2005)',
+    lopezibanez2016: 'López-Ibáñez et al. (2016)', kennedy1995: 'Kennedy & Eberhart (1995)', ai2009: 'Ai & Kachitvichyanukul (2009)', storn1997: 'Storn & Price (1997)', tarantilis2002: 'Tarantilis, Kiranoudis & Vassiliadis (2002)', li2005: 'Li, Golden & Wasil (2005)',
     sorensen2013: 'Sörensen & Schittekat (2013)', russell2006: 'Russell & Chiang (2006)', teoh2015: 'Teoh, Ponnambalam & Kanagaraj (2015)',
   };
-  /* the reference-set size etc. are fixed in the code above; the numbers in `params` are the defaults of that code */
+  /* the reference-set size etc. are fixed in the code above; the numbers in `params` are the values a run uses: tuned values for the
+   * seven methods of VRP.TUNED_PARAMS, the values of the cited papers for the others */
 
   /* iterations that make one run of `id` take about `seconds` of compute on instance I: times a short probe run of the real method (which also
    * covers the start-up cost of population methods).  Used for equal-time budgets; the probe is deterministic in everything but the clock. */
   const initCache = new WeakMap();                                  // the savings start of an instance, shared by the timing runs of all methods
   V.calibrate = function (I, id, seconds, opts) {
     const o = opts || {}, init = initCache.has(I) ? initCache.get(I) : (initCache.set(I, V.savings(I)), initCache.get(I)), probeMs = Math.max(80, Math.min(o.probeMs || 400, seconds * 250));
-    const S = V.createSearch(I, init, { mode: id, iters: 1e9, seed: 12345, ops: o.ops, k: o.k, params: o.params });
+    const S = V.createSearch(I, init, { mode: id, iters: 1e9, seed: 12345, ops: o.ops, k: o.k, params: o.params, defaults: o.defaults });
     S.stepFor(probeMs * 0.4); const it1 = S.iter, s1 = S.seconds;      // warm-up (JIT, population start-up) is left out of the rate
     S.stepFor(probeMs * 0.6);
     const d = S.iter - it1, per = d >= 5 ? (S.seconds - s1) / d : Math.max(S.seconds, 1e-4) / Math.max(S.iter, 1);

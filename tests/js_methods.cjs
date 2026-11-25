@@ -137,11 +137,47 @@ const file = path.join(root, 'docs', 'data', 'cvrp', 'X-n101-k25.vrp');
 if (!fs.existsSync(file)) { console.log('SKIP: docs/data/cvrp/X-n101-k25.vrp missing'); console.log(passed + ' passed, benchmark tests skipped'); process.exit(77); }
 test('X-n101-k25: every method is feasible, improves on savings, and none goes below the best-known value', () => {
   const X = V.parseInstance(fs.readFileSync(file, 'utf8'), 'X-n101-k25'), init = V.savings(X), c0 = V.solCost(X, init), bks = 27591;
-  const iters = { sisr: 6000, ils: 40, sa: 150000, ta: 150000, rtr: 150000, tabu: 8000, vns: 30, grasp: 25, msls: 25, alns: 600, lns: 600, ig: 1500, ga: 40, aco: 40, grasppr: 12, scatter: 30, brkga: 600, pso: 600, de: 600, rkrs: 600 };
+  const iters = { sisr: 6000, ils: 40, sa: 150000, ta: 150000, rtr: 150000, tabu: 8000, vns: 30, grasp: 400, msls: 25, alns: 600, lns: 600, ig: 1500, ga: 40, aco: 40, grasppr: 12, scatter: 30, brkga: 600, pso: 600, de: 600, rkrs: 600 };
   for (const id of IDS) {
     const S = V.createSearch(X, init, { mode: id, iters: iters[id], seed: 1, ops: V.PRESETS.full, k: 12 }); while (!S.step(50));
     assert.deepStrictEqual(V.violations(X, S.best), [], id); assert.ok(S.bestCost >= bks - 0.5, id + ' below BKS'); assert.ok(S.bestCost <= c0 + 1e-6, id);
     if (id !== 'rkrs') assert.ok(S.bestCost < c0 - 1, id + ' did not improve the savings solution');
   }
+});
+
+/* ---- tuned parameters ---- */
+test('tuned parameters: the 21 values equal the final irace configurations, for exactly seven methods', () => {
+  const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'tuned_params.json'), 'utf8'));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(V.TUNED_PARAMS)), fx.tuned);
+  assert.deepStrictEqual(Object.keys(V.TUNED_PARAMS).sort(), ['aco', 'grasp', 'lns', 'pso', 'rtr', 'sisr', 'ta']);
+  assert.strictEqual(Object.values(V.TUNED_PARAMS).reduce((u, p) => u + Object.keys(p).length, 0), 21);
+  for (const m of Object.keys(V.TUNED_PARAMS)) assert.deepStrictEqual(Object.keys(V.LITERATURE_PARAMS[m]).sort(), Object.keys(V.TUNED_PARAMS[m]).sort(), m);
+  for (const [id, m] of Object.entries(V.METHODS)) assert.strictEqual(/tuned with irace/.test(m.params), id in V.TUNED_PARAMS, id + ' parameter text');
+});
+
+test('tuned parameters: defaults "literature" reproduces the results from before the change; other methods are unchanged', () => {
+  const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'tuned_params.json'), 'utf8')).literatureResults;
+  const root = path.join(__dirname, '..', 'docs', 'data');
+  for (const [name, file] of [['CMT1', 'cvrp/CMT1.vrp'], ['p01', 'mdvrp/p01']]) {
+    const I = V.parseInstance(fs.readFileSync(path.join(root, file), 'utf8'), name), init = V.savings(I);
+    for (const m of Object.keys(V.METHODS)) {
+      const pop = ['ga', 'aco', 'grasppr', 'scatter', 'brkga', 'pso', 'de', 'grasp', 'msls'].includes(m);
+      const run = extra => { const S = V.createSearch(I, init, Object.assign({ mode: m, iters: pop ? 25 : 2500, seed: 7, ops: V.PRESETS.full, k: 12 }, extra)); S.step(1e9); assert.deepStrictEqual(V.violations(I, S.best), [], name + ' ' + m); return S.bestCost; };
+      assert.strictEqual(run({ defaults: 'literature' }), fx[name][m], name + ' ' + m + ' with literature parameters');
+      if (!(m in V.TUNED_PARAMS)) assert.strictEqual(run({}), fx[name][m], name + ' ' + m + ' has no tuned values and must not change');
+      else assert.strictEqual(run({ params: V.LITERATURE_PARAMS[m] }), fx[name][m], name + ' ' + m + ' with the literature values passed as params');
+    }
+  }
+});
+
+test('tuned parameters: SISR reads its parameters, and every tuned method differs from its literature version', () => {
+  const I = V.parseInstance(fs.readFileSync(path.join(__dirname, '..', 'docs', 'data', 'cvrp', 'CMT1.vrp'), 'utf8'), 'CMT1'), init = V.savings(I);
+  const run = (m, extra, iters) => { const S = V.createSearch(I, init, Object.assign({ mode: m, iters, seed: 7, ops: V.PRESETS.full, k: 12 }, extra)); S.step(1e9); assert.deepStrictEqual(V.violations(I, S.best), []); return S.bestCost; };
+  const a = run('sisr', {}, 2500), b = run('sisr', { params: { cbar: 5, lmax: 5 } }, 2500), c = run('sisr', { params: { t0: 5, tf: 1 } }, 2500);
+  assert.ok(a !== b && a !== c && b !== c, 'cfg.params must change the SISR run');
+  assert.strictEqual(run('sisr', { params: V.TUNED_PARAMS.sisr }, 2500), a);
+  for (const m of Object.keys(V.TUNED_PARAMS)) { const it = ['aco', 'pso', 'grasp'].includes(m) ? 200 : 2500; assert.notStrictEqual(run(m, {}, it), run(m, { defaults: 'literature' }, it), m); }
+  assert.strictEqual(run('ils', {}, 300), run('ils', { defaults: 'literature' }, 300), 'ILS keeps its own constants');
+  assert.ok(V.calibrate(I, 'sisr', 1) >= 20 && V.calibrate(I, 'sisr', 1, { defaults: 'literature' }) >= 20);
 });
 console.log(passed + ' passed');

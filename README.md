@@ -40,7 +40,7 @@ The mathematical models (CVRP and MDVRP), the family of variants, what changes w
 
 ## Scope and limits
 
-The solver is an educational implementation. It is written from the cited papers in a compact form and is not tuned to reproduce published results; for large instances or benchmark-quality solutions use a specialised solver such as HGS-CVRP, PyVRP or FILO (links in the Learn guide). Best-known values are shown only where they could be checked against a published table.
+The solver is an educational implementation. It is written from the cited papers in a compact form. Seven methods (SISR-style ruin and recreate, threshold accepting, record-to-record travel, GRASP, large neighbourhood search, ant colony and particle swarm) run with parameters tuned with irace (López-Ibáñez et al., 2016) on the reference C++ implementation; the other methods use the parameter values of the cited papers. It does not aim to reproduce published results; for large instances or benchmark-quality solutions use a specialised solver such as HGS-CVRP, PyVRP or FILO (links in the Learn guide). Best-known values are shown only where they could be checked against a published table.
 
 ## Repository
 
